@@ -16,7 +16,7 @@ class SocialMediaService:
     """Service for handling social media content processing tasks."""
     
     # Regular expressions to identify different social media platforms
-    TIKTOK_REGEX = re.compile(r'(vm\.tiktok\.com|vt\.tiktok\.com|tiktok\.com|www\.tiktok\.com)\/(?:embed|@[\w.-]+\/video\/|v\/|t\/|)(\w+)')
+    TIKTOK_REGEX = re.compile(r'(vm\.tiktok\.com|vt\.tiktok\.com|tiktok\.com|www\.tiktok\.com)')
     INSTAGRAM_REGEX = re.compile(r'(instagram\.com|instagr\.am|www\.instagram\.com)\/(?:p|reel|reels|stories)\/([^\/\?]+)')
     
     @staticmethod
@@ -133,18 +133,64 @@ class SocialMediaService:
             'no_warnings': True,
             'format': 'best[ext=mp4]/best',
             'outtmpl': output_path,
-            'noplaylist': True,
-            'cookiefile': None,  # Don't use cookies
-            'socket_timeout': 10,  # Reduced timeout
-            'retries': 3  # Retry on connection failures
+            'noplaylist': False,  # Changed to handle slide shows/playlists
+            'cookiefile': None,
+            'socket_timeout': 10,
+            'retries': 3,
+            'ignoreerrors': True,  # Continue on errors with individual entries
+            'playlistend': 10      # Limit to 10 entries to prevent excessive downloads
         }
         
         # Add platform-specific options
         if platform == 'tiktok':
-            ydl_opts['extractor_args'] = {'TikTok': {'download_without_watermark': True}}
+            ydl_opts.update({
+                'extractor_args': {
+                    'TikTok': {
+                        'download_without_watermark': True,
+                        'extract_flat': False,  # Ensure all slides are processed
+                        'allow_unplayable_formats': True  # Allow image formats
+                    }
+                },
+                'writethumbnail': True,  # Save thumbnails (for slides with images)
+                'writeinfojson': True,   # Save metadata
+                'concurrent_fragment_downloads': 5  # Speed up downloads
+            })
         
         try:
-            # Download the video
+            # First, get info to check if this is a playlist/slide post
+            info = SocialMediaService._extract_info(url, {**ydl_opts, 'skip_download': True})
+            
+            if not info:
+                return None, "Failed to extract content information"
+            
+            # Check if this is a TikTok slide post (has entries or is_gallery property)
+            is_slide_post = False
+            if platform == 'tiktok' and (
+                    info.get('entries') or 
+                    info.get('is_gallery') or 
+                    '_type' in info and info['_type'] == 'playlist'):
+                is_slide_post = True
+                logger.info(f"Detected TikTok slide post: {url}")
+                
+                # For slide posts, we need to handle each slide separately
+                if is_slide_post and info.get('entries'):
+                    # Create a directory for this post
+                    post_dir = os.path.join(DOWNLOADS_FOLDER, f"tiktok_slide_{hash(url) % 1000000}")
+                    os.makedirs(post_dir, exist_ok=True)
+                    
+                    # Modify output template for slide entries
+                    ydl_opts['outtmpl'] = os.path.join(post_dir, '%(playlist_index)s-%(title).100s.%(ext)s')
+                    
+                    # Download all slides
+                    success = SocialMediaService._download_content(url, ydl_opts)
+                    
+                    if not success:
+                        return None, "Failed to download slide content"
+                    
+                    # Return the directory containing all slides
+                    return post_dir, None
+            
+            # If not a slide post, download as usual
             success = SocialMediaService._download_content(url, ydl_opts)
             
             if not success:
@@ -195,18 +241,92 @@ class SocialMediaService:
                 'preferredquality': '192',
             }],
             'outtmpl': output_path.replace('.mp3', ''),  # yt-dlp will add the extension
-            'noplaylist': True,
-            'cookiefile': None,  # Don't use cookies
-            'socket_timeout': 10,  # Reduced timeout
-            'retries': 3  # Retry on connection failures
+            'noplaylist': False,  # Changed to handle slide shows with music
+            'cookiefile': None,
+            'socket_timeout': 10,
+            'retries': 3,
+            'ignoreerrors': True,  # Continue on errors with individual entries
+            'playlistend': 10      # Limit to 10 entries to prevent excessive downloads
         }
         
         # Add platform-specific options
         if platform == 'tiktok':
-            ydl_opts['extractor_args'] = {'TikTok': {'download_without_watermark': True}}
+            ydl_opts.update({
+                'extractor_args': {
+                    'TikTok': {
+                        'download_without_watermark': True,
+                        'extract_flat': False  # Ensure all slides are processed
+                    }
+                },
+                'concurrent_fragment_downloads': 5  # Speed up downloads
+            })
         
         try:
-            # Download and extract audio
+            # First, get info to check if this is a playlist/slide post
+            info = SocialMediaService._extract_info(url, {**ydl_opts, 'skip_download': True})
+            
+            if not info:
+                return None, "Failed to extract content information"
+            
+            # Check if this is a TikTok slide post with entries
+            is_slide_post = False
+            if platform == 'tiktok' and (
+                    info.get('entries') or 
+                    info.get('is_gallery') or 
+                    '_type' in info and info['_type'] == 'playlist'):
+                is_slide_post = True
+                logger.info(f"Detected TikTok slide post for audio extraction: {url}")
+                
+                # For TikTok slides, we need to extract the original sound/music which is usually the same for all slides
+                if is_slide_post and info.get('entries'):
+                    # Find the main audio track from the slide post
+                    main_audio_url = None
+                    for entry in info.get('entries', []):
+                        if entry and entry.get('music_url') or entry.get('audio_url'):
+                            main_audio_url = entry.get('music_url') or entry.get('audio_url')
+                            break
+                    
+                    # If we found a direct music URL, download it
+                    if main_audio_url:
+                        # Create audio-specific options
+                        audio_opts = {
+                            'quiet': True,
+                            'no_warnings': True,
+                            'format': 'bestaudio/best',
+                            'postprocessors': [{
+                                'key': 'FFmpegExtractAudio',
+                                'preferredcodec': 'mp3',
+                                'preferredquality': '192',
+                            }],
+                            'outtmpl': output_path.replace('.mp3', ''),
+                            'noplaylist': True,
+                            'cookiefile': None,
+                            'socket_timeout': 10,
+                            'retries': 3
+                        }
+                        
+                        # Download the music directly
+                        with yt_dlp.YoutubeDL(audio_opts) as ydl:
+                            ydl.download([main_audio_url])
+                            return output_path, None
+                    
+                    # Create a directory for all audio tracks from the slides
+                    post_dir = os.path.join(DOWNLOADS_FOLDER, f"tiktok_audio_{hash(url) % 1000000}")
+                    os.makedirs(post_dir, exist_ok=True)
+                    
+                    # Modify output template for slide entries
+                    ydl_opts['outtmpl'] = os.path.join(post_dir, '%(playlist_index)s-%(title).100s.%(ext)s')
+                    
+                    # Download all audio tracks from slides
+                    success = SocialMediaService._download_content(url, ydl_opts)
+                    
+                    if not success:
+                        return None, "Failed to extract audio from slides"
+                    
+                    # Return the directory containing all audio files
+                    return post_dir, None
+            
+            # If not a slide post, extract audio as usual
             success = SocialMediaService._download_content(url, ydl_opts)
             
             if not success:

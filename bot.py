@@ -4,11 +4,12 @@ Bot initialization and setup.
 import os
 import logging
 import random
+import re
 from datetime import datetime
 import nest_asyncio
 nest_asyncio.apply()
 
-from telegram import Update, InputMediaPhoto
+from telegram import Update, InputMediaPhoto, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, 
     CommandHandler, 
@@ -25,7 +26,7 @@ from api_client import AIApiClient
 from config import BOT_TOKEN, game_states, DOWNLOADS_FOLDER
 import utils.helpers as helpers
 from handlers.command_handlers import search_command, scrape_command, youtube_command
-from handlers.message_handlers import handle_message as url_handler, handle_callback
+from handlers.message_handlers import handle_callback
 from handlers.photo_handlers import handle_photo, analyze_command
 
 logger = logging.getLogger(__name__)
@@ -47,10 +48,32 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• Extract content from websites\n"
         "• Convert text to handwritten style\n"
         "• And much more!\n\n"
-        "Try the /help command to see all available features, or just start chatting with me right away!"
+        "Try the buttons below to explore my features, or just start chatting with me right away!"
     )
     
-    await update.message.reply_markdown(welcome_text)
+    # Create an inline keyboard with common commands
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("🔍 Web Search", callback_data="help_search"),
+            InlineKeyboardButton("🖼️ Image Search", callback_data="help_img")
+        ],
+        [
+            InlineKeyboardButton("📱 TikTok Download", callback_data="help_tiktok"),
+            InlineKeyboardButton("📸 Instagram Download", callback_data="help_instagram")
+        ],
+        [
+            InlineKeyboardButton("🎬 YouTube Download", callback_data="help_youtube"),
+            InlineKeyboardButton("📝 Handwritten Text", callback_data="help_write")
+        ],
+        [
+            InlineKeyboardButton("📚 All Commands", callback_data="help_all")
+        ]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_markdown(welcome_text, reply_markup=reply_markup)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /help is issued."""
@@ -89,7 +112,22 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• Reply to the bot's messages to continue conversation threads"
     )
     
-    await update.message.reply_markdown(help_text)
+    # Create an inline keyboard with common command categories
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("📱 Media Downloads", callback_data="help_media"),
+            InlineKeyboardButton("🔍 Information Tools", callback_data="help_info")
+        ],
+        [
+            InlineKeyboardButton("🖼️ Image Features", callback_data="help_image"),
+            InlineKeyboardButton("🎮 Fun & Utilities", callback_data="help_fun")
+        ]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_markdown(help_text, reply_markup=reply_markup)
 
 async def total_messages_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show total messages for today."""
@@ -442,26 +480,144 @@ async def tiktok_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return
             
-        # Create a message with options to download video or audio
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        # Directly download the video instead of showing options
+        result, error = await SocialMediaService.download_video(url)
         
-        keyboard = [
-            [InlineKeyboardButton("📥 Download Video", callback_data=f"download_sm_video:tiktok:{url}")],
-            [InlineKeyboardButton("🎵 Extract Audio", callback_data=f"extract_sm_audio:tiktok:{url}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Delete the status message
-        try:
-            await status_message.delete()
-        except Exception:
-            pass
+        if not result or error:
+            # Delete the status message
+            try:
+                await status_message.delete()
+            except Exception:
+                pass
+                
+            await update.message.reply_markdown(
+                f"❌ *Download Failed*\n\n"
+                f"Sorry, I couldn't download this TikTok content: {error or 'Unknown error'}\n\n"
+                f"This might be due to TikTok's restrictions or a problem with the URL."
+            )
+            return
             
-        await update.message.reply_markdown(
-            "📱 *TikTok Content Detected*\n\n"
-            "What would you like to do with this content?",
-            reply_markup=reply_markup
-        )
+        # Check if result is a directory (for TikTok slide posts)
+        if os.path.isdir(result):
+            # This is a slide post with multiple media files
+            await status_message.edit_text("✅ Downloaded TikTok slides. Sending them now...")
+            
+            # Get all files in the directory
+            media_files = []
+            for filename in sorted(os.listdir(result)):
+                file_path = os.path.join(result, filename)
+                
+                # Skip non-media files and files that are too large
+                if os.path.isdir(file_path) or filename.endswith('.json'):
+                    continue
+                
+                file_size = os.path.getsize(file_path)
+                if file_size > 50 * 1024 * 1024:  # 50MB limit for Telegram
+                    continue  # Skip files that are too large
+                
+                media_files.append(file_path)
+            
+            # Send all media files (up to 10)
+            for i, file_path in enumerate(media_files[:10]):
+                file_ext = os.path.splitext(file_path)[1].lower()
+                
+                try:
+                    # Add extract audio button for the first slide
+                    caption = f"TikTok Slide {i+1}/{len(media_files)}"
+                    reply_markup = None
+                    
+                    if i == 0:  # Only add button to the first slide
+                        keyboard = [
+                            [InlineKeyboardButton("🎵 Extract Audio", callback_data=f"extract_sm_audio:tiktok:{url}")]
+                        ]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+                    
+                    if file_ext in ['.jpg', '.jpeg', '.png', '.webp']:
+                        # Send as photo
+                        with open(file_path, "rb") as photo_file:
+                            await context.bot.send_photo(
+                                chat_id=update.message.chat_id,
+                                photo=photo_file,
+                                caption=caption,
+                                reply_markup=reply_markup
+                            )
+                    elif file_ext in ['.mp4', '.avi', '.mkv', '.mov']:
+                        # Send as video
+                        with open(file_path, "rb") as video_file:
+                            await context.bot.send_video(
+                                chat_id=update.message.chat_id,
+                                video=video_file,
+                                caption=caption,
+                                supports_streaming=True,
+                                reply_markup=reply_markup
+                            )
+                    else:
+                        # Send as document
+                        with open(file_path, "rb") as doc_file:
+                            await context.bot.send_document(
+                                chat_id=update.message.chat_id,
+                                document=doc_file,
+                                caption=caption,
+                                reply_markup=reply_markup
+                            )
+                except Exception as e:
+                    logger.error(f"Error sending slide {i+1}: {e}")
+                    continue  # Continue with next file even if one fails
+            
+            # Delete the status message
+            try:
+                await status_message.delete()
+            except Exception:
+                pass
+            
+            # Clean up the directory
+            import shutil
+            shutil.rmtree(result)
+            
+        else:
+            # Regular single video file
+            # Check file size
+            file_size = os.path.getsize(result)
+            if file_size > 50 * 1024 * 1024:  # 50MB limit for Telegram
+                # Delete the status message
+                try:
+                    await status_message.delete()
+                except Exception:
+                    pass
+                    
+                await update.message.reply_markdown(
+                    f"❌ *File Too Large*\n\n"
+                    f"The video file is too large ({file_size / (1024 * 1024):.1f} MB) to send via Telegram.\n"
+                    f"Maximum allowed size is 50 MB."
+                )
+                # Clean up the file
+                os.remove(result)
+                return
+            
+            # Add extract audio button
+            keyboard = [
+                [InlineKeyboardButton("🎵 Extract Audio", callback_data=f"extract_sm_audio:tiktok:{url}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Delete the status message
+            try:
+                await status_message.delete()
+            except Exception:
+                pass
+            
+            # Send the video file directly
+            with open(result, "rb") as video_file:
+                await context.bot.send_video(
+                    chat_id=update.message.chat_id,
+                    video=video_file,
+                    caption="Here's your TikTok video!",
+                    supports_streaming=True,
+                    reply_markup=reply_markup
+                )
+            
+            # Clean up the file after sending
+            os.remove(result)
 
     except Exception as e:
         logger.error(f"Error processing TikTok URL: {str(e)}")
@@ -514,7 +670,7 @@ async def instagram_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
             
         # Create a message with options to download video or audio
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        # Inline keyboard imports moved to top of file
         
         keyboard = [
             [InlineKeyboardButton("📥 Download Video", callback_data=f"download_sm_video:instagram:{url}")],
@@ -560,6 +716,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         user_message = update.message.text
         chat_type = update.message.chat.type
         bot_username = context.bot.username
+        
+        # First, check if this is a URL we can process
+        from handlers.message_handlers import process_youtube_url, process_social_media_url
+        from services.social_media_service import SocialMediaService
+        from utils.helpers import is_youtube_url
+        
+        # Check if the message contains a URL
+        urls = re.findall(r'https?://\S+', user_message)
+        if urls:
+            for url in urls:
+                # Check if it's a YouTube URL
+                if is_youtube_url(url):
+                    await process_youtube_url(update, context, url)
+                    return
+                
+                # Check if it's a TikTok or Instagram URL
+                platform = SocialMediaService.identify_platform(url)
+                if platform in ['tiktok', 'instagram']:
+                    await process_social_media_url(update, context, url, platform)
+                    return
 
         # Handle game guesses
         if user_id in game_states:
@@ -641,12 +817,152 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # Check for TikTok and Instagram URLs
             platform = SocialMediaService.identify_platform(user_message)
             if platform == 'tiktok':
-                context.args = [user_message]
-                await tiktok_command(update, context)
+                # Send a processing message first
+                status_message = await update.message.reply_text("⏳ *Processing TikTok Video*\n\nDownloading and removing watermark...", parse_mode="Markdown")
+                
+                # Download the video
+                result, error = await SocialMediaService.download_video(user_message)
+                
+                if not result or error:
+                    # Delete the status message
+                    try:
+                        await status_message.delete()
+                    except Exception:
+                        pass
+                        
+                    await update.message.reply_markdown(
+                        f"❌ *Download Failed*\n\n"
+                        f"Sorry, I couldn't download this TikTok content: {error or 'Unknown error'}\n\n"
+                        f"This might be due to TikTok's restrictions or a problem with the URL."
+                    )
+                    return
+                    
+                # Check if result is a directory (for TikTok slide posts)
+                if os.path.isdir(result):
+                    # This is a slide post with multiple media files
+                    await status_message.edit_text("✅ Downloaded TikTok slides. Sending them now...")
+                    
+                    # Get all files in the directory
+                    media_files = []
+                    for filename in sorted(os.listdir(result)):
+                        file_path = os.path.join(result, filename)
+                        
+                        # Skip non-media files and files that are too large
+                        if os.path.isdir(file_path) or filename.endswith('.json'):
+                            continue
+                        
+                        file_size = os.path.getsize(file_path)
+                        if file_size > 50 * 1024 * 1024:  # 50MB limit for Telegram
+                            continue  # Skip files that are too large
+                        
+                        media_files.append(file_path)
+                    
+                    # Send all media files (up to 10)
+                    for i, file_path in enumerate(media_files[:10]):
+                        file_ext = os.path.splitext(file_path)[1].lower()
+                        
+                        try:
+                            # Add extract audio button for the first slide
+                            caption = f"TikTok Slide {i+1}/{len(media_files)}"
+                            reply_markup = None
+                            
+                            if i == 0:  # Only add button to the first slide
+                                keyboard = [
+                                    [InlineKeyboardButton("🎵 Extract Audio", callback_data=f"extract_sm_audio:tiktok:{user_message}")]
+                                ]
+                                reply_markup = InlineKeyboardMarkup(keyboard)
+                            
+                            if file_ext in ['.jpg', '.jpeg', '.png', '.webp']:
+                                # Send as photo
+                                with open(file_path, "rb") as photo_file:
+                                    await context.bot.send_photo(
+                                        chat_id=update.message.chat_id,
+                                        photo=photo_file,
+                                        caption=caption,
+                                        reply_markup=reply_markup
+                                    )
+                            elif file_ext in ['.mp4', '.avi', '.mkv', '.mov']:
+                                # Send as video
+                                with open(file_path, "rb") as video_file:
+                                    await context.bot.send_video(
+                                        chat_id=update.message.chat_id,
+                                        video=video_file,
+                                        caption=caption,
+                                        supports_streaming=True,
+                                        reply_markup=reply_markup
+                                    )
+                            else:
+                                # Send as document
+                                with open(file_path, "rb") as doc_file:
+                                    await context.bot.send_document(
+                                        chat_id=update.message.chat_id,
+                                        document=doc_file,
+                                        caption=caption,
+                                        reply_markup=reply_markup
+                                    )
+                        except Exception as e:
+                            logger.error(f"Error sending slide {i+1}: {e}")
+                            continue  # Continue with next file even if one fails
+                    
+                    # Delete the status message
+                    try:
+                        await status_message.delete()
+                    except Exception:
+                        pass
+                    
+                    # Clean up the directory
+                    import shutil
+                    shutil.rmtree(result)
+                    
+                else:
+                    # Regular single video file
+                    # Check file size
+                    file_size = os.path.getsize(result)
+                    if file_size > 50 * 1024 * 1024:  # 50MB limit for Telegram
+                        # Delete the status message
+                        try:
+                            await status_message.delete()
+                        except Exception:
+                            pass
+                            
+                        await update.message.reply_markdown(
+                            f"❌ *File Too Large*\n\n"
+                            f"The video file is too large ({file_size / (1024 * 1024):.1f} MB) to send via Telegram.\n"
+                            f"Maximum allowed size is 50 MB."
+                        )
+                        # Clean up the file
+                        os.remove(result)
+                        return
+                    
+                    # Add extract audio button
+                    keyboard = [
+                        [InlineKeyboardButton("🎵 Extract Audio", callback_data=f"extract_sm_audio:tiktok:{user_message}")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    
+                    # Delete the status message
+                    try:
+                        await status_message.delete()
+                    except Exception:
+                        pass
+                    
+                    # Send the video file directly
+                    with open(result, "rb") as video_file:
+                        await context.bot.send_video(
+                            chat_id=update.message.chat_id,
+                            video=video_file,
+                            caption="Here's your TikTok video!",
+                            supports_streaming=True,
+                            reply_markup=reply_markup
+                        )
+                    
+                    # Clean up the file after sending
+                    os.remove(result)
+                
                 return
             elif platform == 'instagram':
                 # Create a message with options to download video or audio
-                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                # Inline keyboard imports moved to top of file
                 
                 keyboard = [
                     [InlineKeyboardButton("📥 Download Video", callback_data=f"download_sm_video:instagram:{user_message}")],
@@ -769,11 +1085,8 @@ def create_bot():
     # Add chat member update handler
     application.add_handler(ChatMemberHandler(handle_chat_member_update, ChatMemberHandler.MY_CHAT_MEMBER))
     
-    # Process URLs first, then return early so we don't try AI processing on URLs
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, url_handler), group=1)
-    
-    # Process all text messages with AI response handler (lower priority)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message), group=2)
+    # Process all text messages with AI response handler
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Add error handler
     application.add_error_handler(error_handler)

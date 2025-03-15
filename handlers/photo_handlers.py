@@ -10,129 +10,67 @@ from telegram import Update, InputMediaPhoto
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
-from services.image_analyzer import ImageAnalyzer
+# We'll import handle_message from the handlers module to avoid circular imports
+from handlers.message_handlers import handle_message as process_message
 
 logger = logging.getLogger(__name__)
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handle photo messages sent to the bot.
-    Analyze the photo content and return detailed information.
+    In group chats: Only respond if the bot is mentioned or directly replied to.
+    In private chats: Process normally.
     """
     if not update.message or not update.message.photo:
         return
 
     # Get the largest photo (best quality)
     photo = update.message.photo[-1]
-    caption = update.message.caption or "No caption provided"
+    caption = update.message.caption
     
-    # Send a status message
-    status_message = await update.message.reply_text(
-        "🔍 *Analyzing your image...*\n\n"
-        "I'm examining this image with my AI vision tools.\n"
-        "Just a moment while I process what I see!",
+    # Get the bot's username to check for mentions
+    bot_username = context.bot.username
+    
+    # Check if this is in a group chat
+    is_group = update.effective_chat.type in ["group", "supergroup"]
+    
+    # In group chats, only respond if:
+    # 1. Bot is mentioned in caption
+    # 2. Message is a reply to the bot's message
+    # 3. User used a command
+    bot_mentioned = False
+    replied_to_bot = False
+    is_command = False
+    
+    if caption and bot_username and f"@{bot_username}" in caption:
+        bot_mentioned = True
+    
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        if update.message.reply_to_message.from_user.id == context.bot.id:
+            replied_to_bot = True
+    
+    if caption and caption.startswith("/"):
+        is_command = True
+        
+    # In group chats, only process if bot is mentioned/replied to
+    if is_group and not (bot_mentioned or replied_to_bot or is_command):
+        # Silently ignore the message - don't respond at all
+        return
+        
+    # Process the message if it has a caption
+    if caption:
+        # Use the handle_message function that we imported as process_message
+        await process_message(update, context)
+        return
+    
+    # In private chats or when explicitly addressed in groups, respond with the help message
+    await update.message.reply_text(
+        "ℹ️ *Image received*\n\n"
+        "I noticed you sent an image without any text. If you'd like me to analyze this image, "
+        "please use the /analyze command as a reply to this image.\n\n"
+        "Alternatively, you can resend the image with a caption describing what you'd like me to do.",
         parse_mode=ParseMode.MARKDOWN
     )
-    
-    try:
-        # Get the file
-        photo_file = await context.bot.get_file(photo.file_id)
-        photo_bytes = await download_telegram_file(photo_file.file_path)
-        
-        if not photo_bytes:
-            await status_message.edit_text(
-                "❌ *Error*\n\n"
-                "Sorry, I couldn't download your image for analysis.\n"
-                "Please try again with a different image.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-            
-        # Analyze the image
-        analysis_result = await ImageAnalyzer.analyze_image(photo_bytes)
-        
-        if "error" in analysis_result:
-            await status_message.edit_text(
-                "❌ *Error*\n\n"
-                f"Sorry, I couldn't analyze your image: {analysis_result['error']}\n"
-                "Please try again with a different image.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-            
-        # Generate an annotated image and summary
-        annotated_image, summary_text = await ImageAnalyzer.generate_analysis_image(photo_bytes, analysis_result)
-        
-        # Delete the status message
-        try:
-            await status_message.delete()
-        except Exception:
-            # If we can't delete, just continue
-            pass
-            
-        # Format a nice response message
-        response_text = (
-            "🔍 *Image Analysis Results*\n\n"
-            f"{summary_text}\n\n"
-        )
-        
-        # Check if there's extracted text to display
-        if analysis_result.get('text') and len(analysis_result['text']) > 0:
-            extracted_text = analysis_result['text']
-            # Truncate long text for the message
-            if len(extracted_text) > 700:
-                truncated_text = extracted_text[:700] + "...(text truncated)"
-            else:
-                truncated_text = extracted_text
-                
-            response_text += (
-                "📄 *Full Extracted Text:*\n"
-                f"`{truncated_text}`\n\n"
-            )
-        
-        # Create the file-like object for the annotated image
-        annotated_image_io = io.BytesIO(annotated_image)
-        annotated_image_io.name = "analyzed_image.jpg"
-        
-        # Send the analyzed image with the results
-        await context.bot.send_photo(
-            chat_id=update.effective_chat.id,
-            photo=annotated_image_io,
-            caption=response_text[:1024],  # Telegram caption limit
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        # If we have a lot of text that was truncated in the message, send it as a separate message
-        if analysis_result.get('text') and len(analysis_result['text']) > 700:
-            full_text_message = (
-                "📝 *Complete Extracted Text:*\n\n"
-                f"{analysis_result['text']}"
-            )
-            
-            # Split into chunks if needed (Telegram has a 4096 character limit)
-            await send_long_message(
-                update.effective_chat.id,
-                full_text_message,
-                context.bot,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-    except Exception as e:
-        logger.error(f"Error analyzing photo: {str(e)}")
-        
-        # Try to delete the status message
-        try:
-            await status_message.delete()
-        except Exception:
-            pass
-            
-        await update.message.reply_text(
-            "❌ *Error*\n\n"
-            "Sorry, I encountered an error while analyzing your image.\n"
-            "This might be due to API limitations or the image format.\n\n"
-            "Please try again with a different image.",
-            parse_mode=ParseMode.MARKDOWN
-        )
         
 async def download_telegram_file(file_path: str) -> Optional[bytes]:
     """Download a file from Telegram servers."""
@@ -172,24 +110,15 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     Format: /analyze (should be used as a reply to an image)
     """
     if update.message.reply_to_message and update.message.reply_to_message.photo:
-        # If replying to a photo, analyze that photo
-        photo = update.message.reply_to_message.photo[-1]  # Get largest size
-        
-        # Create a fake update to reuse handle_photo
-        fake_update = Update(
-            update_id=update.update_id,
-            message=update.message.reply_to_message
+        # If replying to a photo, tell the user that the image analysis service is currently unavailable
+        await update.message.reply_markdown(
+            "ℹ️ *Image Analysis Service Notice*\n\n"
+            "I'm sorry, but the image analysis service is currently unavailable due to API limitations.\n\n"
+            "The image analysis capability will be restored once the necessary API access is configured."
         )
-        
-        await handle_photo(fake_update, context)
     else:
         await update.message.reply_markdown(
             "📷 *Image Analyzer*\n\n"
-            "Send me any photo and I'll analyze it to:\n"
-            "• Detect objects and scenes\n"
-            "• Extract text (OCR)\n"
-            "• Detect faces and expressions\n"
-            "• Identify landmarks and logos\n\n"
-            "You can also reply to an existing photo with /analyze to analyze it.\n\n"
-            "Example: Send a photo of text to extract its content, or a photo of a landmark to identify it."
+            "I'm sorry, but the image analysis service is currently unavailable due to API limitations.\n\n"
+            "The image analysis capability will be restored once the necessary API access is configured."
         )
