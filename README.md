@@ -1,4 +1,4 @@
-# Telegram Content Processing Bot
+# Telegram Ai Based Bot
 
 A Telegram bot that processes web content and YouTube videos using Google APIs and web scraping techniques.
 
