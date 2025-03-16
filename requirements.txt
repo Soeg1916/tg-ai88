@@ -47,3 +47,8 @@ yt-dlp
 pillow
 google-api-python-client
 openai
+googletrans==4.0.0-rc1
+aiohttp==3.8.4
+httpx==0.25.0
+python-telegram-bot==20.6
+aiohttp

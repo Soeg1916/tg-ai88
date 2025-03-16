@@ -28,18 +28,18 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
     
-    await update.message.reply_text(f"🔍 Searching for: {query}...")
+    await update.message.reply_text(f"🔍 Searching for the latest results on: {query}...")
     
     try:
-        # Perform Google search
+        # Perform Google search with emphasis on latest results
         results = await GoogleSearchService.search(query)
         
         if not results:
-            await update.message.reply_text("No results found for your search query.")
+            await update.message.reply_text("No recent results found for your search query.")
             return
         
         # Format the results
-        response = f"📊 Search results for: *{query}*\n\n"
+        response = f"📰 Latest search results for: *{query}*\n(from the past 7 days)\n\n"
         
         for i, result in enumerate(results, 1):
             title = result.get("title", "No title")

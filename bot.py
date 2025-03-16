@@ -28,6 +28,7 @@ import utils.helpers as helpers
 from handlers.command_handlers import search_command, scrape_command, youtube_command
 from handlers.message_handlers import handle_callback
 from handlers.photo_handlers import handle_photo, analyze_command
+from handlers.game_handlers import checkers_command, end_checkers_command, move_checkers_command, handle_checkers_callback, handle_checkers_move_message
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             InlineKeyboardButton("📝 Handwritten Text", callback_data="help_write")
         ],
         [
+            InlineKeyboardButton("♟️ Play Checkers", callback_data="help_checkers"),
+            InlineKeyboardButton("🧮 Calculator", callback_data="help_calculate")
+        ],
+        [
+            InlineKeyboardButton("😈 Insult Generator", callback_data="help_insult"),
+            InlineKeyboardButton("📊 Fun & Stats", callback_data="help_fun")
+        ],
+        [
             InlineKeyboardButton("📚 All Commands", callback_data="help_all")
         ]
     ]
@@ -80,7 +89,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     help_text = (
         "🤖 *AI Telegram Bot Commands* 🤖\n\n"
         "*Conversation*\n"
-        "• /start - Start the bot and see available commands\n"
+        "• /start - Start the bot and see welcome message\n"
         "• /clear - Clear your conversation history\n"
         "• /context - See your current conversation context\n\n"
         
@@ -90,20 +99,33 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• /youtube <url> - Process YouTube videos\n\n"
         
         "*Information Tools*\n"
-        "• /search <query> - Search the web for information\n"
+        "• /search <query> - Search the web for recent information\n"
         "• /scrape <url> - Extract content from a website\n"
-        "• /img <search> - Search and send images\n\n"
+        "• /img <search> - Search and send random images\n\n"
         
         "*Image Analysis*\n"
         "• Send any photo - Automatically analyze objects, text, and content\n"
         "• /analyze - Reply to a photo with this command to analyze it\n\n"
         
-        "*Fun & Utilities*\n"
+        "*Games & Fun*\n"
+        "• /checkers [@username] - Play a game of checkers\n"
+        "• /move A3-B4 - Make a move in your checkers game\n"
+        "• /endcheckers - End the current checkers game\n"
+        "• /fun - Play a number guessing game\n\n"
+        
+        "*Creative & Utilities*\n"
         "• /write <text> - Convert text to handwritten style\n"
-        "• /fun - Play a number guessing game\n"
+        "• /insult @username - Generate a humorous roast for someone\n"
+        "• /calculate 2+2*3 - Solve mathematical expressions\n"
         "• /total - Show total messages today\n"
         "• /ttotal - Show total messages this year\n"
         "• /admins - View group administrators (groups only)\n\n"
+        
+        "*Checkers Game Commands*\n"
+        "• /checkers - Play against AI\n"
+        "• /checkers @username - Challenge another user\n"
+        "• /move A3-B4 - Move a piece (A3 to B4)\n"
+        "• /endcheckers - End the current game\n\n"
         
         "*Pro Tips*:\n"
         "• Send any URL to automatically process YouTube/TikTok/Instagram links\n"
@@ -117,11 +139,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     keyboard = [
         [
             InlineKeyboardButton("📱 Media Downloads", callback_data="help_media"),
-            InlineKeyboardButton("🔍 Information Tools", callback_data="help_info")
+            InlineKeyboardButton("🔍 Search Tools", callback_data="help_info")
+        ],
+        [
+            InlineKeyboardButton("♟️ Games", callback_data="help_games"),
+            InlineKeyboardButton("🎮 Fun Features", callback_data="help_fun")
         ],
         [
             InlineKeyboardButton("🖼️ Image Features", callback_data="help_image"),
-            InlineKeyboardButton("🎮 Fun & Utilities", callback_data="help_fun")
+            InlineKeyboardButton("🧮 Utilities", callback_data="help_utilities")
         ]
     ]
     
@@ -211,16 +237,70 @@ async def image_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
         
-    search_term = " ".join(context.args)
-    status_message = await update.message.reply_text(f"🔍 Searching for images of '*{search_term}*'...", parse_mode="Markdown")
+    # Store unique image search ID for this chat to track searches
+    chat_id = update.effective_chat.id
+    
+    # Generate a unique timestamp for this search
+    import time
+    timestamp = int(time.time())
+    
+    # Get the original search term
+    original_search_term = " ".join(context.args)
+    search_term = original_search_term
+    
+    # Create a unique search key incorporating chat_id
+    search_key = f"{chat_id}_{original_search_term.lower().replace(' ', '_')}"
+    
+    # Track search history for this chat/term to ensure variety
+    # Format: {'term_key': {'last_search': timestamp, 'previous_links': [list of links]}}
+    if 'image_search_history' not in context.chat_data:
+        context.chat_data['image_search_history'] = {}
+        
+    # Adjust the search term if we've seen this search before
+    import random
+    search_history = context.chat_data['image_search_history']
+    if search_key in search_history:
+        # If the same search has been used recently, add variety
+        time_since_last = timestamp - search_history[search_key].get('last_search', 0)
+        
+        # If searched within the last hour, add variety to the query
+        if time_since_last < 3600:  # 3600 seconds = 1 hour
+            # This is a repeated search, add variety
+            modifiers = ["beautiful", "amazing", "colorful", "awesome", "cool", 
+                         "recent", "best", "popular", "wonderful", "gorgeous",
+                         "newest", "trending", "top rated", "excellent"]
+            random_modifier = random.choice(modifiers)
+            
+            # Higher chance to add a modifier for frequent searches
+            if time_since_last < 300:  # If within 5 minutes
+                modifier_chance = 0.9
+            else:
+                modifier_chance = 0.7
+                
+            if random.random() < modifier_chance:
+                search_term = f"{random_modifier} {search_term}"
+                logger.info(f"Recent search detected, modified to: {search_term}")
+    
+    # Start with a search status message
+    status_message = await update.message.reply_text(
+        f"🔍 Searching for images of '*{original_search_term}*'...", 
+        parse_mode="Markdown"
+    )
     
     try:
         from services.google_search import GoogleSearchService
         
-        # Get search results - limit to 4 images as requested
-        results = await GoogleSearchService.image_search(search_term, num_results=4)
+        # Generate a more varied random seed based on chat, user, and timestamp
+        seed_value = (chat_id + update.effective_user.id + timestamp) % 1000
         
-        # Delete the status message regardless of result
+        # Get more results than needed so we can filter out duplicates and select random ones
+        logger.info(f"Searching for images: {search_term} with seed {seed_value}")
+        
+        # Our enhanced Google search will already try multiple strategies if needed
+        results = await GoogleSearchService.image_search(search_term, num_results=10)
+        logger.info(f"Image search results count: {len(results)}")
+        
+        # Try to delete the status message regardless of result
         try:
             await status_message.delete()
         except Exception:
@@ -230,60 +310,113 @@ async def image_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if not results:
             await update.message.reply_markdown(
                 "🔍 *Image Search Results*\n\n"
-                f"❌ No images found for '*{search_term}*'.\n\n"
+                f"❌ No images found for '*{original_search_term}*'.\n\n"
                 "Please try a different search term."
             )
             return
             
-        # Send up to 4 images max
+        # Send up to 4 images in a group
         media_group = []
-        count = 0
+        valid_items = []
+        selected_links = []
         
-        for item in results[:4]:  # Limit to 4 results
+        # Get previously used links for this search term (if any)
+        previous_links = []
+        if search_key in search_history:
+            previous_links = search_history[search_key].get('previous_links', [])
+        
+        # First collect all valid image links that haven't been sent recently
+        logger.info(f"Processing {len(results)} image results")
+        for i, item in enumerate(results):
             if 'link' in item:
                 try:
-                    media_group.append(InputMediaPhoto(item['link']))
-                    count += 1
-                except Exception:
+                    link = item['link']
+                    
+                    # Skip if this link was recently sent to this chat for the same search
+                    if link in previous_links:
+                        logger.info(f"Skipping previously sent image: {link[:30]}...")
+                        continue
+                        
+                    # Validate the link can be used as InputMediaPhoto
+                    logger.info(f"Found valid image link {i+1}: {link[:30]}...")
+                    InputMediaPhoto(link)
+                    valid_items.append(item)
+                except Exception as e:
                     # Skip any problematic URLs
+                    logger.error(f"Invalid image link {i+1}: {str(e)}")
                     continue
-                
-                # Limit to exactly 4 images
-                if count >= 4:
-                    break
+        
+        # If no new images found but we have results, allow reuse of previous links
+        if not valid_items and results:
+            logger.info("No new images found, using some previous links")
+            for i, item in enumerate(results):
+                if 'link' in item:
+                    try:
+                        # Validate the link can be used
+                        InputMediaPhoto(item['link'])
+                        valid_items.append(item)
+                    except:
+                        continue
+        
+        # If we have valid items, select up to 4
+        if valid_items:
+            logger.info(f"Collected {len(valid_items)} valid image items")
+            # Shuffle to randomize selection
+            random.shuffle(valid_items)
+            logger.info(f"Shuffled valid items, now selecting up to 4")
+            
+            # Take up to 4 random images
+            for i, item in enumerate(valid_items[:4]):
+                link = item['link']
+                logger.info(f"Adding image {i+1} to media group: {link[:30]}...")
+                media_group.append(InputMediaPhoto(link))
+                selected_links.append(link)
                     
         if media_group:
             try:
+                # Send the media group
                 await context.bot.send_media_group(
                     chat_id=update.effective_chat.id,
                     media=media_group
                 )
-                await update.message.reply_markdown(
-                    f"🖼️ Here are *{len(media_group)}* images for '*{search_term}*'\n\n"
-                    "Want more? Try another search with `/img`"
-                )
+                
+                # Update search history with timestamp and links
+                context.chat_data['image_search_history'][search_key] = {
+                    'last_search': timestamp,
+                    'previous_links': selected_links + previous_links[:20]  # Keep last ~24 links (6 searches x 4 images)
+                }
+                
             except Exception as e:
                 logger.error(f"Error sending media group: {str(e)}")
                 # Try to send images one by one if group fails
                 sent_count = 0
-                for item in media_group[:3]:  # Limit to 3 on fallback
+                successful_links = []
+                
+                # Get a random selection if we have more than 3 for fallback
+                fallback_group = media_group[:3]  # Limit to 3 on fallback
+                
+                for item in fallback_group:
                     try:
                         await context.bot.send_photo(
                             chat_id=update.effective_chat.id,
                             photo=item.media
                         )
                         sent_count += 1
-                    except:
+                        successful_links.append(item.media)
+                    except Exception as e:
+                        logger.error(f"Error sending individual photo: {str(e)}")
                         continue
                 
-                if sent_count > 0:
-                    await update.message.reply_markdown(
-                        f"🖼️ Found *{sent_count}* images for '*{search_term}*'"
-                    )
+                # Update history with the links that were actually sent
+                if successful_links:
+                    context.chat_data['image_search_history'][search_key] = {
+                        'last_search': timestamp,
+                        'previous_links': successful_links + previous_links[:20]
+                    }
         else:
             await update.message.reply_markdown(
                 "🔍 *Image Search Results*\n\n"
-                f"⚠️ Found search results for '*{search_term}*' but couldn't retrieve images.\n\n"
+                f"⚠️ Found search results for '*{original_search_term}*' but couldn't retrieve valid images.\n\n"
                 "Please try a different search term."
             )
             
@@ -445,6 +578,85 @@ async def convert_to_handwritten(update: Update, context: ContextTypes.DEFAULT_T
             "Sorry, an error occurred while converting your text to handwritten style.\n"
             "Please try again with a shorter text."
         )
+
+async def insult_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate a humorous insult for a specified user"""
+    if not context.args:
+        await update.message.reply_markdown(
+            "😈 *Insult Generator*\n\n"
+            "Please provide a username after /insult\n\n"
+            "Example: `/insult @username`\n\n"
+            "I'll create a humorous roast for that person!"
+        )
+        return
+        
+    # Get the target username
+    target = context.args[0]
+    
+    # Make sure it's a username mention format
+    if not target.startswith('@'):
+        target = '@' + target
+        
+    # List of funny, creative insults
+    insults = [
+        f"{target} is so boring, sleeping pills take them to fall asleep.",
+        f"{target}'s selfies are the reason phones have a self-destruct option.",
+        f"{target} is the human version of a participation award.",
+        f"{target} is so bad at taking selfies, their phone automatically switches to the settings app.",
+        f"I'd roast {target}, but my mom told me not to burn trash because it's bad for the environment.",
+        f"{target} has such a way with words... too bad it's the wrong way.",
+        f"{target} is proof that evolution can go in reverse.",
+        f"If {target} was a spice, they'd be flour.",
+        f"{target} is like a cloud - when they disappear, it's a beautiful day.",
+        f"{target}'s cooking is the reason doorbells were invented.",
+        f"{target} is so out of shape, they get tired walking to the refrigerator.",
+        f"{target} is the reason why shampoo has instructions.",
+        f"{target} is like a broken calculator - they can't even count on themselves.",
+        f"{target} is the type to get lost in a grocery store and call for help.",
+        f"{target} is so lazy, they have a remote control for their remote control.",
+        f"{target} has a face only a mother could love... from a distance.",
+        f"{target} thinks 'getting some fresh air' means opening the refrigerator.",
+        f"{target} has a perfect face for radio and a perfect voice for silent films.",
+        f"{target} has such a unique fashion sense - it's like they got dressed in the dark... during an earthquake.",
+        f"If brains were dynamite, {target} wouldn't have enough to blow their nose.",
+        f"{target} is as useful as a screen door on a submarine.",
+        f"{target} is so old, their memory is in black and white.",
+        f"{target} is so slow, they take 2 hours to watch 60 Minutes.",
+        f"{target} is the reason why aliens won't talk to us.",
+        f"{target} has delusions of adequacy.",
+        f"{target} is living proof that nature sometimes makes mistakes.",
+        f"{target} has all the charm and charisma of a dead fish.",
+        f"{target}'s room is so dirty, they need a tetanus shot just to make their bed.",
+        f"{target} is so predictable, fortune tellers charge them half price.",
+        f"{target} is like a broken pencil - pointless.",
+        f"{target} is so uninteresting, their imaginary friends ghosted them.",
+        f"{target} dances like they're being electrocuted.",
+        f"{target} sings like they're gargling mouthwash.",
+        f"{target} has the fashion sense of a colorblind scarecrow.",
+        f"{target} types with just their index fingers.",
+        f"{target} eats pizza with a fork and knife.",
+        f"{target} still uses Internet Explorer... by choice.",
+        f"{target} couldn't pour water out of a boot if the instructions were on the heel.",
+        f"{target} has fewer followers than a broken compass.",
+        f"{target} is as deep as a parking lot puddle.",
+        f"{target} dresses like they got their clothes from a dumpster behind a clown college.",
+        f"{target} is so basic, they make plain yogurt look spicy.",
+        f"{target} has the coordination of a newborn giraffe on an ice rink.",
+        f"{target} has the charm of a mosquito at a blood bank.",
+        f"{target} looks like they were drawn by a 5-year-old using their non-dominant hand.",
+        f"{target} is about as useful as a chocolate teapot.",
+        f"{target} has a face that would make an onion cry.",
+        f"{target} has the personality of unseasoned boiled chicken.",
+        f"{target} is like elevator music - annoying and forgettable.",
+        f"{target} has all the appeal of a gas station bathroom."
+    ]
+    
+    # Select a random insult
+    import random
+    insult = random.choice(insults)
+    
+    # Send just the insult with no extra text
+    await update.message.reply_text(f"{insult}")
 
 async def tiktok_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Download TikTok video without watermark"""
@@ -706,6 +918,284 @@ async def instagram_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "Please try again with a different link."
         )
 
+async def calculate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Calculate the result of a mathematical expression"""
+    import re
+    
+    if not context.args:
+        await update.message.reply_markdown(
+            "🧮 *Calculator*\n\n"
+            "Please provide a math expression after /calculate\n\n"
+            "Example: `/calculate 2 + 2 * 3`\n\n"
+            "I can handle basic operations like +, -, *, /, as well as parentheses and exponents (^)."
+        )
+        return
+    
+    expression = ' '.join(context.args)
+    result = calculate_expression(expression)
+    
+    if result is not None:
+        await update.message.reply_text(f"🧮 {expression} = {result}")
+    else:
+        await update.message.reply_text("❌ Invalid math expression. Please check your syntax.")
+
+def calculate_expression(expression):
+    """Calculate the result of a mathematical expression."""
+    try:
+        # Replace ^ with ** for exponentiation
+        expression = expression.replace('^', '**')
+        
+        # Use safer eval by creating a local dict with only math functions
+        import math
+        import operator
+        from decimal import Decimal
+        
+        # Define allowed functions and operators
+        safe_dict = {
+            'abs': abs, 'round': round,
+            'sin': math.sin, 'cos': math.cos, 'tan': math.tan,
+            'asin': math.asin, 'acos': math.acos, 'atan': math.atan,
+            'sqrt': math.sqrt, 'log': math.log, 'log10': math.log10,
+            'pi': math.pi, 'e': math.e,
+            'Decimal': Decimal
+        }
+        
+        # Add basic operators
+        safe_dict.update({k: getattr(operator, k) for k in [
+            'add', 'sub', 'mul', 'truediv', 'pow', 'mod', 'floordiv'
+        ]})
+        
+        # Check for unsafe constructs
+        if any(keyword in expression for keyword in [
+            'import', 'eval', 'exec', 'compile', 'globals', 'locals',
+            'getattr', 'setattr', 'delattr', '__'
+        ]):
+            return None
+        
+        # Convert the expression to use safer functions
+        sanitized_expr = expression
+        sanitized_expr = sanitized_expr.replace('+', 'add(')
+        sanitized_expr = sanitized_expr.replace('-', 'sub(')
+        sanitized_expr = sanitized_expr.replace('*', 'mul(')
+        sanitized_expr = sanitized_expr.replace('/', 'truediv(')
+        sanitized_expr = sanitized_expr.replace('%', 'mod(')
+        sanitized_expr = sanitized_expr.replace('//', 'floordiv(')
+        
+        # Unfortunately, this approach gets complex with nested expressions
+        # So let's use direct eval with some safeguards
+        
+        # Simple security check: only allow specific characters
+        if not re.match(r'^[0-9\.\+\-\*\/\(\)\^\s%]*$', expression):
+            return None
+            
+        result = eval(expression)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error calculating expression: {str(e)}")
+        return None
+
+async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handle the /tl command to translate text.
+    
+    Formats:
+    - /tl <text> (auto-detects source language, translates to English)
+    - /tl <lang_code> <text> (translates to specified language)
+    - Reply to a message with /tl (translates the replied message to English)
+    - Reply with /tl <lang_code> (translates to specified language)
+    """
+    # Check if it's a reply to another message
+    is_reply = update.message.reply_to_message is not None
+    
+    if not context.args and not is_reply:
+        # No arguments and not a reply - show help
+        await show_translation_help(update)
+        return
+    
+    # Extract the text to translate and the target language
+    text_to_translate = None
+    target_language = 'en'  # Default to English
+    
+    if context.args:
+        # Check if the first argument is a language code
+        first_arg = context.args[0].lower()
+        # A simple check - language codes are usually 2-5 characters
+        if 2 <= len(first_arg) <= 5:
+            target_language = first_arg
+            # Rest of arguments form the text
+            if len(context.args) > 1:
+                text_to_translate = ' '.join(context.args[1:])
+        else:
+            # First argument is not a language code, so the entire args is the text
+            text_to_translate = ' '.join(context.args)
+    
+    # If we're replying to a message, get text from that
+    if is_reply and not text_to_translate:
+        replied_msg = update.message.reply_to_message
+        text_to_translate = replied_msg.text or replied_msg.caption or ''
+    
+    if not text_to_translate:
+        await update.message.reply_text(
+            "❌ Please provide text to translate or reply to a message to translate it."
+        )
+        return
+    
+    # Send a "translating" status message
+    status_message = await update.message.reply_text(
+        f"🔄 Translating to {target_language}..."
+    )
+    
+    try:
+        # Perform the translation using a simple URL-based approach
+        translated_text = await translate_text(text_to_translate, target_language)
+        
+        # Try to delete the status message
+        try:
+            await status_message.delete()
+        except Exception:
+            pass
+        
+        # Create buttons for common languages
+        keyboard = [
+            [
+                InlineKeyboardButton("🇬🇧 English", callback_data=f"translate:en:{text_to_translate[:50]}"),
+                InlineKeyboardButton("🇪🇸 Spanish", callback_data=f"translate:es:{text_to_translate[:50]}")
+            ],
+            [
+                InlineKeyboardButton("🇫🇷 French", callback_data=f"translate:fr:{text_to_translate[:50]}"),
+                InlineKeyboardButton("🇩🇪 German", callback_data=f"translate:de:{text_to_translate[:50]}")
+            ],
+            [
+                InlineKeyboardButton("🇨🇳 Chinese", callback_data=f"translate:zh-cn:{text_to_translate[:50]}"),
+                InlineKeyboardButton("🇯🇵 Japanese", callback_data=f"translate:ja:{text_to_translate[:50]}")
+            ],
+            [
+                InlineKeyboardButton("🇪🇹 Amharic", callback_data=f"translate:am:{text_to_translate[:50]}")
+            ]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Send the translation
+        await update.message.reply_text(
+            f"🌐 *Translation*\n\n{translated_text}",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+        
+    except Exception as e:
+        logger.error(f"Translation error: {e}")
+        
+        # Try to delete the status message
+        try:
+            await status_message.delete()
+        except Exception:
+            pass
+        
+        # Send error message
+        await update.message.reply_text(
+            "❌ Translation failed. Please try again later or with different text."
+        )
+
+async def show_translation_help(update: Update) -> None:
+    """Show help information for the translation command."""
+    help_text = (
+        "🌐 *Translation Help*\n\n"
+        "*Usage:*\n"
+        "• `/tl Hello world` - Translate to English\n"
+        "• `/tl es Hello world` - Translate to Spanish\n"
+        "• Reply to any message with `/tl` - Translate to English\n"
+        "• Reply with `/tl fr` - Translate to French\n\n"
+        "*Some Language Codes:*\n"
+        "• English: `en`\n"
+        "• Spanish: `es`\n"
+        "• French: `fr`\n"
+        "• German: `de`\n"
+        "• Russian: `ru`\n"
+        "• Arabic: `ar`\n"
+        "• Chinese: `zh-cn`\n"
+        "• Japanese: `ja`\n"
+        "• Amharic: `am`\n"
+        "• Portuguese: `pt`\n"
+        "• Hindi: `hi`"
+    )
+    
+    # Create a keyboard with common language options
+    keyboard = [
+        [
+            InlineKeyboardButton("🇬🇧 English", callback_data="translate_help:en"),
+            InlineKeyboardButton("🇪🇸 Spanish", callback_data="translate_help:es")
+        ],
+        [
+            InlineKeyboardButton("🇫🇷 French", callback_data="translate_help:fr"),
+            InlineKeyboardButton("🇩🇪 German", callback_data="translate_help:de")
+        ],
+        [
+            InlineKeyboardButton("🇨🇳 Chinese", callback_data="translate_help:zh-cn"),
+            InlineKeyboardButton("🇯🇵 Japanese", callback_data="translate_help:ja")
+        ],
+        [
+            InlineKeyboardButton("🇪🇹 Amharic", callback_data="translate_help:am")
+        ]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        help_text,
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
+
+async def translate_text(text: str, target_lang: str = 'en', source_lang: str = 'auto') -> str:
+    """
+    Simple function to translate text using Google Translate API.
+    
+    Args:
+        text: The text to translate
+        target_lang: The language to translate to
+        source_lang: The source language (auto for auto-detection)
+        
+    Returns:
+        The translated text
+    """
+    import urllib.parse
+    import aiohttp
+    import json
+    
+    try:
+        # Use Google Translate's API to translate text
+        async with aiohttp.ClientSession() as session:
+            url = "https://translate.googleapis.com/translate_a/single"
+            params = {
+                "client": "gtx",
+                "dt": "t",
+                "sl": source_lang,
+                "tl": target_lang,
+                "q": text
+            }
+            
+            full_url = f"{url}?{urllib.parse.urlencode(params)}"
+            async with session.get(full_url) as response:
+                if response.status != 200:
+                    logger.error(f"Translation failed: {response.status}")
+                    raise Exception(f"Translation service returned status code {response.status}")
+                
+                data = await response.json(content_type=None)
+                translated_parts = []
+                
+                # Extract translated text from the data structure
+                for part in data[0]:
+                    if part[0]:
+                        translated_parts.append(part[0])
+                
+                return ''.join(translated_parts)
+                
+    except Exception as e:
+        logger.error(f"Translation error: {e}")
+        raise Exception(f"Error translating text: {str(e)}")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle user messages and respond using AI."""
     try:
@@ -717,12 +1207,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         chat_type = update.message.chat.type
         bot_username = context.bot.username
         
+        # Check if it's a math expression (when bot is mentioned)
+        is_mentioned = False
+        if chat_type != "private":
+            if update.message.entities:
+                for entity in update.message.entities:
+                    if entity.type == "mention" and user_message[entity.offset:entity.offset+entity.length] == f"@{bot_username}":
+                        is_mentioned = True
+                        break
+        else:
+            is_mentioned = True
+            
+        if is_mentioned:
+            # Look for math expression patterns
+            # Simple pattern: numbers and math operators
+            import re  # Explicitly import re within this function scope
+            expression_pattern = r'[-+]?[0-9]*\.?[0-9]+[\+\-\*\/\^%][0-9\+\-\*\/\^\(\)\.\s%]*'
+            math_pattern = re.search(expression_pattern, user_message)
+            
+            if math_pattern:
+                expression = math_pattern.group(0).strip()
+                result = calculate_expression(expression)
+                if result is not None:
+                    await update.message.reply_text(f"🧮 {expression} = {result}")
+                    return
+        
         # First, check if this is a URL we can process
         from handlers.message_handlers import process_youtube_url, process_social_media_url
         from services.social_media_service import SocialMediaService
         from utils.helpers import is_youtube_url
         
         # Check if the message contains a URL
+        import re  # Make sure re is imported here as well
         urls = re.findall(r'https?://\S+', user_message)
         if urls:
             for url in urls:
@@ -1069,6 +1585,9 @@ def create_bot():
     application.add_handler(CommandHandler("write", convert_to_handwritten))
     application.add_handler(CommandHandler("tiktok", tiktok_command))
     application.add_handler(CommandHandler("instagram", instagram_command))
+    application.add_handler(CommandHandler("insult", insult_command))
+    application.add_handler(CommandHandler("calculate", calculate_command))
+    application.add_handler(CommandHandler("tl", translate_command))
     
     # Add new command handlers
     application.add_handler(CommandHandler("search", search_command))
@@ -1076,22 +1595,48 @@ def create_bot():
     application.add_handler(CommandHandler("youtube", youtube_command))
     application.add_handler(CommandHandler("analyze", analyze_command))
     
+    # Add checkers game handlers
+    application.add_handler(CommandHandler("checkers", checkers_command))
+    application.add_handler(CommandHandler("endcheckers", end_checkers_command))
+    application.add_handler(CommandHandler("move", move_checkers_command))
+    
     # Add photo handler
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    # Add callback query handler
-    application.add_handler(CallbackQueryHandler(handle_callback))
+    # Add callback query handlers
+    application.add_handler(CallbackQueryHandler(handle_checkers_callback, pattern=r"^(join_checkers|move_checkers)"))
+    application.add_handler(CallbackQueryHandler(handle_callback))  # Fallback for all other callbacks
     
     # Add chat member update handler
     application.add_handler(ChatMemberHandler(handle_chat_member_update, ChatMemberHandler.MY_CHAT_MEMBER))
     
-    # Process all text messages with AI response handler
+    # Process all text messages - first try to handle checkers moves in private chats
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        lambda update, context: handle_private_message(update, context)
+    ))
+    
+    # Process all remaining text messages with AI response handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Add error handler
     application.add_error_handler(error_handler)
     
     return application
+
+async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Handler for private messages - tries to handle game moves first.
+    Returns True if message was handled, False otherwise.
+    """
+    # First check if it's a checkers move
+    if await handle_checkers_move_message(update, context):
+        return True
+    
+    # Add any other game message handlers here
+    
+    # If not handled by any game, let it fallthrough to the next handler
+    return False
 
 def error_handler(update, context):
     """Log the error and send a message to the user."""

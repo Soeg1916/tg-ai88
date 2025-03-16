@@ -247,6 +247,118 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         _, platform, url = query.data.split(":", 2)
         await extract_social_media_audio(query, context, url, platform)
         
+    # Handle checkers game help
+    elif query.data == "help_checkers":
+        help_text = (
+            "♟️ *Checkers Game* ♟️\n\n"
+            "Play the classic game of Checkers right in Telegram!\n\n"
+            "*How to play:*\n"
+            "• Use `/checkers` to start a game against the AI\n"
+            "• Use `/checkers @username` to challenge another user\n"
+            "• Make moves with `/move A3-B4` format\n"
+            "• End a game with `/endcheckers`\n\n"
+            "*Game Rules:*\n"
+            "• Regular pieces move diagonally forward one space\n"
+            "• Captures are made by jumping over opponent pieces\n"
+            "• Reach the opponent's end to make a King\n"
+            "• Kings can move diagonally forward or backward\n"
+            "• Win by capturing all opponent pieces or blocking all moves\n\n"
+            "Try it now with `/checkers`!"
+        )
+        await query.edit_message_text(text=help_text, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # Handle calculator help
+    elif query.data == "help_calculate":
+        help_text = (
+            "🧮 *Calculator* 🧮\n\n"
+            "Solve mathematical expressions right in Telegram!\n\n"
+            "*How to use:*\n"
+            "• Use `/calculate 2+2*3` to calculate the result\n"
+            "• Or just mention the bot with a math problem: `@YourBot 5+7/2`\n\n"
+            "*Supported operations:*\n"
+            "• Addition: `5+3`\n"
+            "• Subtraction: `10-4`\n"
+            "• Multiplication: `6*8`\n"
+            "• Division: `20/5`\n"
+            "• Exponentiation: `2^3` (2 cubed)\n"
+            "• Modulo: `10%3` (remainder after division)\n"
+            "• Parentheses: `(4+2)*3`\n\n"
+            "Try it now with `/calculate 15/3+2^2`!"
+        )
+        await query.edit_message_text(text=help_text, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    # Handle translation callbacks
+    elif query.data.startswith("translate:"):
+        try:
+            # Format: translate:lang_code:original_text
+            parts = query.data.split(":", 2)
+            if len(parts) < 3:
+                await query.message.reply_text("❌ Invalid translation request")
+                return
+                
+            target_lang = parts[1]
+            original_text = parts[2]
+            
+            # If the original text was cut (limited to 50 chars), use the message text
+            if len(original_text) < 50 and "..." not in original_text:
+                # Use the full text from the original message
+                # We need to find the original text in the data
+                from bot import translate_text
+                
+                # Call the translation function
+                translated_text = await translate_text(original_text, target_lang)
+                
+                # Edit the existing message with the new translation
+                # Extract the original response text (first line)
+                original_title = "🌐 *Translation*\n\n"
+                
+                # Update message with the new translation
+                await query.message.edit_text(
+                    f"{original_title}{translated_text}",
+                    parse_mode="Markdown",
+                    reply_markup=query.message.reply_markup
+                )
+            
+        except Exception as e:
+            logger.error(f"Translation callback error: {e}")
+            await query.message.reply_text("❌ Translation failed. Please try again.")
+    
+    # Handle translation help menu callbacks
+    elif query.data.startswith("translate_help:"):
+        try:
+            # Format: translate_help:lang_code
+            parts = query.data.split(":", 1)
+            if len(parts) < 2:
+                await query.message.reply_text("❌ Invalid language selection")
+                return
+                
+            target_lang = parts[1]
+            from bot import translate_text
+            
+            help_text = (
+                "How to use translation:\n\n"
+                "• `/tl Hello world` - Translate to English\n"
+                "• `/tl es Hello world` - Translate to Spanish\n"
+                "• Reply to any message with `/tl` - Translate to English\n"
+                "• Reply with `/tl fr` - Translate to French"
+            )
+            
+            # Translate the help text
+            translated_help = await translate_text(help_text, target_lang)
+            
+            # Send the translated help
+            await query.message.edit_text(
+                f"🌐 *Translation Help* ({target_lang})\n\n{translated_help}",
+                parse_mode="Markdown",
+                reply_markup=query.message.reply_markup
+            )
+            
+        except Exception as e:
+            logger.error(f"Translation help callback error: {e}")
+            await query.message.reply_text("❌ Translation help failed. Please try again.")
+    
     # Handle help menu callbacks
     elif query.data == "help_all":
         # Show all commands
@@ -274,6 +386,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "*Fun & Utilities*\n"
             "• /write <text> - Convert text to handwritten style\n"
             "• /fun - Play a number guessing game\n"
+            "• /insult @username - Generate a humorous roast for someone\n"
+            "• /calculate <expression> - Solve math calculations\n"
+            "• /tl <text> - Translate text between languages\n"
             "• /total - Show total messages today\n"
             "• /ttotal - Show total messages this year\n"
             "• /admins - View group administrators (groups only)"
@@ -333,6 +448,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "🎮 *Fun & Utilities* 🎮\n\n"
             "• /write <text> - Convert text to handwritten style\n"
             "• /fun - Play a number guessing game\n"
+            "• /insult @username - Generate a humorous roast for someone\n"
+            "• /calculate <expression> - Solve math calculations\n"
+            "• /tl <text> - Translate text between languages\n"
             "• /total - Show total messages today\n"
             "• /ttotal - Show total messages this year\n"
             "• /admins - View group administrators (groups only)\n\n"
@@ -430,6 +548,47 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         await query.message.edit_text(help_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     
+    elif query.data == "help_insult":
+        help_text = (
+            "😈 *Insult Generator* 😈\n\n"
+            "Use the `/insult` command followed by a username to generate a humorous roast for that person.\n\n"
+            "Example: `/insult @username`\n\n"
+            "I'll create a funny, creative roast perfect for friendly banter in group chats!"
+        )
+        
+        # Create back button
+        keyboard = [[InlineKeyboardButton("« Back to Menu", callback_data="help_back")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.message.edit_text(help_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+    
+    elif query.data == "help_translate":
+        help_text = (
+            "🌐 *Translation Tool* 🌐\n\n"
+            "Translate text between languages with the `/tl` command.\n\n"
+            "*Usage Options:*\n"
+            "• Reply to a message with `/tl` - Translates it to English\n"
+            "• `/tl <lang>` - Translates to specified language\n"
+            "  Example: `/tl ja` - Translates to Japanese\n"
+            "• `/tl <source>//<dest>` - Translates from source to destination language\n"
+            "  Example: `/tl ja//en` - Translates from Japanese to English\n"
+            "• `/langs` - Get a list of supported languages\n\n"
+            "*Common Language Codes:*\n"
+            "• English: `en`\n"
+            "• Spanish: `es`\n"
+            "• French: `fr`\n"
+            "• German: `de`\n"
+            "• Chinese: `zh-cn`\n"
+            "• Japanese: `ja`\n"
+            "• Arabic: `ar`"
+        )
+        
+        # Create back button
+        keyboard = [[InlineKeyboardButton("« Back to Menu", callback_data="help_back")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.message.edit_text(help_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+    
     elif query.data == "help_back":
         # Back to main menu
         help_text = (
@@ -448,6 +607,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 InlineKeyboardButton("🎮 Fun & Utilities", callback_data="help_fun")
             ],
             [
+                InlineKeyboardButton("🌐 Translation", callback_data="help_translate"),
                 InlineKeyboardButton("📚 All Commands", callback_data="help_all")
             ]
         ]
