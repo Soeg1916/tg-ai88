@@ -56,6 +56,16 @@ class BettingGame:
         self.results = {}  # {player_id: result}
         self.winner_id = None
         
+        # Store player usernames for better display
+        self.player_usernames = {}  # {player_id: username}
+        
+        # Store player first names and full names for better display
+        self.player_names = {}  # {player_id: first_name} - For direct mentions using first name
+        self.player_full_names = {}  # {player_id: full_name} - For more complete identification
+        
+        # Store message IDs to update all players
+        self.player_messages = {}  # {player_id: (chat_id, message_id)}
+        
         # For single-player games, add a bot player automatically
         if single_player:
             self.players.add(-1)  # -1 represents the bot
@@ -84,6 +94,10 @@ class BettingGame:
             return False
             
         self.players.add(player_id)
+        
+        # Initialize player_messages entry for this player to make sure they receive updates
+        # This will be updated later with the actual chat_id and message_id
+        self.player_messages[player_id] = None
         
         # For most games, we only need two players
         if len(self.players) >= 2:
@@ -231,26 +245,54 @@ class BettingGame:
             # Format the results based on game type
             if self.game_type == GameType.DICE_ROLL:
                 for player_id, roll in self.results.items():
-                    player_name = f"Player {player_id}"
+                    # Use username if available, otherwise fallback to ID
+                    if player_id == -1:
+                        player_name = "🤖 Bot"
+                    elif player_id in self.player_usernames:
+                        player_name = f"@{self.player_usernames[player_id]}"
+                    else:
+                        player_name = f"Player {player_id}"
+                        
                     winner_mark = "🏆 " if player_id == self.winner_id else ""
                     result_text += f"{winner_mark}{player_name}: Rolled {roll}\n"
                     
             elif self.game_type == GameType.COIN_FLIP:
                 for player_id, result in self.results.items():
-                    player_name = f"Player {player_id}"
+                    # Use username if available, otherwise fallback to ID
+                    if player_id == -1:
+                        player_name = "🤖 Bot"
+                    elif player_id in self.player_usernames:
+                        player_name = f"@{self.player_usernames[player_id]}"
+                    else:
+                        player_name = f"Player {player_id}"
+                        
                     winner_mark = "🏆 " if player_id == self.winner_id else ""
                     result_text += f"{winner_mark}{player_name}: {result}\n"
                     
             elif self.game_type == GameType.NUMBER_GUESS:
                 result_text += f"Target Number: {self.target_number}\n\n"
                 for player_id, guess in self.results.items():
-                    player_name = f"Player {player_id}"
+                    # Use username if available, otherwise fallback to ID
+                    if player_id == -1:
+                        player_name = "🤖 Bot"
+                    elif player_id in self.player_usernames:
+                        player_name = f"@{self.player_usernames[player_id]}"
+                    else:
+                        player_name = f"Player {player_id}"
+                        
                     winner_mark = "🏆 " if player_id == self.winner_id else ""
                     result_text += f"{winner_mark}{player_name}: Guessed {guess}\n"
                     
             elif self.game_type == GameType.ROCK_PAPER_SCISSORS:
                 for player_id, move in self.results.items():
-                    player_name = f"Player {player_id}"
+                    # Use username if available, otherwise fallback to ID
+                    if player_id == -1:
+                        player_name = "🤖 Bot"
+                    elif player_id in self.player_usernames:
+                        player_name = f"@{self.player_usernames[player_id]}"
+                    else:
+                        player_name = f"Player {player_id}"
+                        
                     winner_mark = "🏆 " if player_id == self.winner_id else ""
                     result_text += f"{winner_mark}{player_name}: {move.value}\n"
             
@@ -262,11 +304,20 @@ class BettingGame:
             if self.winner_id is None:
                 self.winner_id = self.creator_id
             
+            # Get winner name for display
+            winner_name = ""
+            if self.winner_id == -1:
+                winner_name = "🤖 Bot"
+            elif self.winner_id in self.player_usernames:
+                winner_name = f"@{self.player_usernames[self.winner_id]}"
+            else:
+                winner_name = f"Player {self.winner_id}"
+                
             return (
                 f"🎮 *{game_name} Betting Game - FINISHED*\n\n"
                 f"Game ID: `{self.game_id}`\n"
                 f"Results:\n{result_text}\n"
-                f"Winner: Player {self.winner_id}\n"
+                f"Winner: {winner_name}\n"
                 f"Winnings: {total_pot} credits\n"
             )
         

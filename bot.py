@@ -1674,7 +1674,7 @@ def create_bot():
     # Add betting game callback handler
     application.add_handler(CallbackQueryHandler(
         handlers.betting_handlers.handle_betting_callback,
-        pattern=r"^(join_betting_game|betting_game_move|cancel_betting_game)"
+        pattern=r"^(join_betting_game|betting_game_move|cancel_betting_game|refresh)"
     ))
     
     application.add_handler(CallbackQueryHandler(handle_callback))  # Fallback for all other callbacks
@@ -1711,13 +1711,16 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     # If not handled by any game, let it fallthrough to the next handler
     return False
 
-def error_handler(update, context):
+async def error_handler(update, context):
     """Log the error and send a message to the user."""
     logger.error(f"Update {update} caused error {context.error}")
     
-    # Send error message to user
+    # Only attempt to send message if update object is valid
     if update and update.effective_chat:
-        context.bot.send_message(
-            chat_id=update.effective_chat.id, 
-            text="Sorry, an error occurred while processing your request. Please try again."
-        )
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id, 
+                text="Sorry, an error occurred while processing your request. Please try again."
+            )
+        except Exception as e:
+            logger.error(f"Failed to send error message: {e}")
