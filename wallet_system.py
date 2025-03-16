@@ -218,13 +218,14 @@ def cancel_bet(bet_id: str, user_id: int) -> Tuple[bool, str]:
     
     return True, "Bet cancelled and all funds refunded."
 
-def settle_bet(bet_id: str, winner_id: int) -> Tuple[bool, str, int]:
+def settle_bet(bet_id: str, winner_id: Optional[int] = None) -> Tuple[bool, str, int]:
     """
     Settle a bet by declaring a winner who gets all the funds.
+    If winner_id is None, it's a tie and all participants get their funds back.
     
     Args:
         bet_id: The bet ID to settle
-        winner_id: The winning user ID
+        winner_id: The winning user ID, or None if it's a tie
         
     Returns:
         Tuple of (success, message, winning_amount)
@@ -233,12 +234,25 @@ def settle_bet(bet_id: str, winner_id: int) -> Tuple[bool, str, int]:
     if bet_id not in active_bets:
         return False, "This bet doesn't exist.", 0
     
+    # Calculate total pot
+    total_pot = sum(active_bets[bet_id]['participants'].values())
+    
+    # Handle tie case
+    if winner_id is None:
+        # It's a tie, refund all participants
+        for participant_id, amount in active_bets[bet_id]['participants'].items():
+            add_funds(participant_id, amount)
+        
+        # Remove the bet
+        del active_bets[bet_id]
+        save_wallets()
+        
+        return True, "It's a tie! All bets have been refunded.", 0
+    
+    # Regular winner case
     # Check if winner is a participant
     if winner_id not in active_bets[bet_id]['participants']:
         return False, "The winner is not a participant in this bet.", 0
-    
-    # Calculate total pot
-    total_pot = sum(active_bets[bet_id]['participants'].values())
     
     # Add winnings to winner
     add_funds(winner_id, total_pot)
@@ -263,6 +277,106 @@ def reset_wallet(user_id: int) -> Tuple[bool, int]:
     save_wallets()
     
     return True, DEFAULT_BALANCE
+
+# Admin functions
+def admin_set_balance(admin_id: int, user_id: int, new_balance: int) -> Tuple[bool, str]:
+    """
+    Admin function to set a user's balance to a specific value.
+    
+    Args:
+        admin_id: The ID of the admin performing the action
+        user_id: The user ID whose balance is being set
+        new_balance: The new balance to set
+        
+    Returns:
+        Tuple of (success, message)
+    """
+    # Check if admin has privilege
+    if admin_id != 1159603709:
+        return False, "You don't have admin privileges to perform this action."
+    
+    if new_balance < 0:
+        return False, "Balance cannot be negative."
+    
+    wallets[user_id] = new_balance
+    save_wallets()
+    
+    return True, f"User {user_id}'s balance has been set to {new_balance} credits."
+
+def admin_add_balance(admin_id: int, user_id: int, amount: int) -> Tuple[bool, str]:
+    """
+    Admin function to add to a user's balance.
+    
+    Args:
+        admin_id: The ID of the admin performing the action
+        user_id: The user ID whose balance is being increased
+        amount: The amount to add
+        
+    Returns:
+        Tuple of (success, message)
+    """
+    # Check if admin has privilege
+    if admin_id != 1159603709:
+        return False, "You don't have admin privileges to perform this action."
+    
+    if amount <= 0:
+        return False, "Amount must be positive."
+    
+    if user_id not in wallets:
+        wallets[user_id] = DEFAULT_BALANCE
+    
+    wallets[user_id] += amount
+    save_wallets()
+    
+    return True, f"Added {amount} credits to user {user_id}. New balance: {wallets[user_id]}."
+
+def admin_remove_balance(admin_id: int, user_id: int, amount: int) -> Tuple[bool, str]:
+    """
+    Admin function to remove from a user's balance.
+    
+    Args:
+        admin_id: The ID of the admin performing the action
+        user_id: The user ID whose balance is being decreased
+        amount: The amount to remove
+        
+    Returns:
+        Tuple of (success, message)
+    """
+    # Check if admin has privilege
+    if admin_id != 1159603709:
+        return False, "You don't have admin privileges to perform this action."
+    
+    if amount <= 0:
+        return False, "Amount must be positive."
+    
+    if user_id not in wallets:
+        wallets[user_id] = DEFAULT_BALANCE
+    
+    if wallets[user_id] < amount:
+        wallets[user_id] = 0
+        save_wallets()
+        return True, f"User {user_id}'s balance has been set to 0 (requested removal was greater than balance)."
+    
+    wallets[user_id] -= amount
+    save_wallets()
+    
+    return True, f"Removed {amount} credits from user {user_id}. New balance: {wallets[user_id]}."
+
+def admin_list_all_wallets(admin_id: int) -> Tuple[bool, Dict[int, int]]:
+    """
+    Admin function to list all wallets with balances.
+    
+    Args:
+        admin_id: The ID of the admin performing the action
+        
+    Returns:
+        Tuple of (success, wallet_data)
+    """
+    # Check if admin has privilege
+    if admin_id != 1159603709:
+        return False, {}
+    
+    return True, wallets
 
 # Load data when module is imported
 load_wallets()

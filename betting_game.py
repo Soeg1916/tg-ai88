@@ -48,6 +48,7 @@ class BettingGame:
         """
         self.game_id = generate_game_id()
         self.game_type = game_type
+        self.is_tie = False  # Flag to indicate if the game ended in a tie
         self.creator_id = creator_id
         self.single_player = single_player
         self.bet_amount = bet_amount
@@ -134,6 +135,8 @@ class BettingGame:
     
     def _determine_winner(self) -> None:
         """Determine the winner based on the game type and moves."""
+        self.is_tie = False  # Track if the game ended in a tie
+        
         if self.game_type == GameType.DICE_ROLL:
             # Highest roll wins
             max_roll = -1
@@ -145,31 +148,45 @@ class BettingGame:
                     max_roll = roll
                     winner = player_id
             
-            # Handle ties (very unlikely with multiple dice)
+            # Handle ties - identify if there's a tie
             winners = [p for p, r in self.player_moves.items() if r == max_roll]
+            
             if len(winners) == 1:
+                # Clear winner
                 self.winner_id = winners[0]
-            # In case of a tie, the creator wins (for simplicity)
             else:
-                self.winner_id = self.creator_id
+                # Tie - no winner
+                self.winner_id = None
+                self.is_tie = True
                 
         elif self.game_type == GameType.COIN_FLIP:
             # The player who guessed correctly wins
             result = random.choice(["heads", "tails"])
+            correct_guessers = []
             
             for player_id, guess in self.player_moves.items():
-                self.results[player_id] = "Correct" if guess == result else "Wrong"
-                if guess == result:
-                    self.winner_id = player_id
+                is_correct = guess == result
+                self.results[player_id] = "Correct" if is_correct else "Wrong"
+                if is_correct:
+                    correct_guessers.append(player_id)
             
-            # If nobody guessed correctly, the creator wins (for simplicity)
-            if not self.winner_id:
-                self.winner_id = self.creator_id
+            # Handle different scenarios
+            if len(correct_guessers) == 1:
+                # One clear winner
+                self.winner_id = correct_guessers[0]
+            elif len(correct_guessers) > 1:
+                # Multiple winners = tie
+                self.winner_id = None
+                self.is_tie = True
+            else:
+                # Nobody guessed correctly = tie
+                self.winner_id = None
+                self.is_tie = True
                 
         elif self.game_type == GameType.NUMBER_GUESS:
             # Closest guess to the target number wins
             closest_diff = float('inf')
-            winner = None
+            closest_players = []
             
             for player_id, guess in self.player_moves.items():
                 diff = abs(guess - self.target_number)
@@ -177,15 +194,25 @@ class BettingGame:
                 
                 if diff < closest_diff:
                     closest_diff = diff
-                    winner = player_id
-                    
-            self.winner_id = winner
+                    closest_players = [player_id]
+                elif diff == closest_diff:
+                    closest_players.append(player_id)
+            
+            # Check for ties
+            if len(closest_players) == 1:
+                self.winner_id = closest_players[0]
+            else:
+                # Multiple players with same closest guess = tie
+                self.winner_id = None
+                self.is_tie = True
                 
         elif self.game_type == GameType.ROCK_PAPER_SCISSORS:
             # Standard rock-paper-scissors rules
             if len(self.players) != 2:
                 # Rock-paper-scissors only works with exactly 2 players
-                self.winner_id = self.creator_id
+                # Consider it a tie if not exactly 2 players
+                self.winner_id = None
+                self.is_tie = True
                 return
                 
             # Get the two player IDs
@@ -202,8 +229,9 @@ class BettingGame:
             
             # Determine winner
             if move1 == move2:
-                # Tie: creator wins
-                self.winner_id = self.creator_id
+                # Tie game
+                self.winner_id = None
+                self.is_tie = True
             elif (move1 == PlayerMove.ROCK and move2 == PlayerMove.SCISSORS) or \
                  (move1 == PlayerMove.SCISSORS and move2 == PlayerMove.PAPER) or \
                  (move1 == PlayerMove.PAPER and move2 == PlayerMove.ROCK):
@@ -253,7 +281,8 @@ class BettingGame:
                     else:
                         player_name = f"Player {player_id}"
                         
-                    winner_mark = "🏆 " if player_id == self.winner_id else ""
+                    # For a tie game, don't show winner mark
+                    winner_mark = "🏆 " if player_id == self.winner_id and not self.is_tie else ""
                     result_text += f"{winner_mark}{player_name}: Rolled {roll}\n"
                     
             elif self.game_type == GameType.COIN_FLIP:
@@ -266,7 +295,7 @@ class BettingGame:
                     else:
                         player_name = f"Player {player_id}"
                         
-                    winner_mark = "🏆 " if player_id == self.winner_id else ""
+                    winner_mark = "🏆 " if player_id == self.winner_id and not self.is_tie else ""
                     result_text += f"{winner_mark}{player_name}: {result}\n"
                     
             elif self.game_type == GameType.NUMBER_GUESS:
@@ -280,7 +309,7 @@ class BettingGame:
                     else:
                         player_name = f"Player {player_id}"
                         
-                    winner_mark = "🏆 " if player_id == self.winner_id else ""
+                    winner_mark = "🏆 " if player_id == self.winner_id and not self.is_tie else ""
                     result_text += f"{winner_mark}{player_name}: Guessed {guess}\n"
                     
             elif self.game_type == GameType.ROCK_PAPER_SCISSORS:
@@ -293,33 +322,39 @@ class BettingGame:
                     else:
                         player_name = f"Player {player_id}"
                         
-                    winner_mark = "🏆 " if player_id == self.winner_id else ""
+                    winner_mark = "🏆 " if player_id == self.winner_id and not self.is_tie else ""
                     result_text += f"{winner_mark}{player_name}: {move.value}\n"
             
-            # Determine winnings
+            # Determine winnings and result message
             total_pot = self.bet_amount * len(self.players)
             
-            # If we don't have a winner (which shouldn't happen but just in case),
-            # default to the creator
-            if self.winner_id is None:
-                self.winner_id = self.creator_id
-            
-            # Get winner name for display
-            winner_name = ""
-            if self.winner_id == -1:
-                winner_name = "🤖 Bot"
-            elif self.winner_id in self.player_usernames:
-                winner_name = f"@{self.player_usernames[self.winner_id]}"
+            if self.is_tie:
+                # It's a tie game - no winner
+                return (
+                    f"🎮 *{game_name} Betting Game - FINISHED*\n\n"
+                    f"Game ID: `{self.game_id}`\n"
+                    f"Results:\n{result_text}\n"
+                    f"🔄 *TIE GAME!* All bets have been refunded.\n"
+                    f"Each player gets back their {self.bet_amount} credits.\n"
+                )
             else:
-                winner_name = f"Player {self.winner_id}"
-                
-            return (
-                f"🎮 *{game_name} Betting Game - FINISHED*\n\n"
-                f"Game ID: `{self.game_id}`\n"
-                f"Results:\n{result_text}\n"
-                f"Winner: {winner_name}\n"
-                f"Winnings: {total_pot} credits\n"
-            )
+                # There's a clear winner
+                # Get winner name for display
+                winner_name = ""
+                if self.winner_id == -1:
+                    winner_name = "🤖 Bot"
+                elif self.winner_id in self.player_usernames:
+                    winner_name = f"@{self.player_usernames[self.winner_id]}"
+                else:
+                    winner_name = f"Player {self.winner_id}"
+                    
+                return (
+                    f"🎮 *{game_name} Betting Game - FINISHED*\n\n"
+                    f"Game ID: `{self.game_id}`\n"
+                    f"Results:\n{result_text}\n"
+                    f"Winner: {winner_name}\n"
+                    f"Winnings: {total_pot} credits\n"
+                )
         
         # Default case (should never reach here, but added to satisfy the return type)
         return f"🎮 *{game_name} Betting Game*\n\nGame ID: `{self.game_id}`\nStatus: Unknown state"

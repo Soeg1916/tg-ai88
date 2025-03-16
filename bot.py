@@ -1657,6 +1657,16 @@ def create_bot():
     application.add_handler(CommandHandler("number", handlers.betting_handlers.number_command))
     application.add_handler(CommandHandler("rps", handlers.betting_handlers.rps_command))
     
+    # Add admin wallet management commands (only available to admin user ID: 1159603709)
+    application.add_handler(CommandHandler("adminsetbalance", handlers.betting_handlers.admin_set_balance_command))
+    application.add_handler(CommandHandler("adminaddbalance", handlers.betting_handlers.admin_add_balance_command))
+    application.add_handler(CommandHandler("adminremovebalance", handlers.betting_handlers.admin_remove_balance_command))
+    application.add_handler(CommandHandler("adminlistwallets", handlers.betting_handlers.admin_list_wallets_command))
+    
+    # Register crypto betting handlers for integration with @cctip_bot
+    from handlers.crypto_handlers import register_crypto_handlers
+    register_crypto_handlers(application)
+    
     application.add_handler(CommandHandler("youtube", youtube_command))
     application.add_handler(CommandHandler("analyze", analyze_command))
     

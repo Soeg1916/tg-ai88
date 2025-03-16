@@ -14,7 +14,8 @@ from betting_game import (
     create_betting_game, get_betting_game, remove_betting_game
 )
 from wallet_system import (
-    get_balance, add_funds, deduct_funds, create_bet, join_bet, cancel_bet, settle_bet
+    get_balance, add_funds, deduct_funds, create_bet, join_bet, cancel_bet, settle_bet,
+    reset_wallet, admin_set_balance, admin_add_balance, admin_remove_balance, admin_list_all_wallets
 )
 
 # Default bet amount for quick commands
@@ -50,6 +51,30 @@ async def wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"*Note:* This is a virtual wallet for testing purposes only. No real money is involved."
     )
     
+    # Add crypto betting information
+    crypto_text = (
+        f"\n\n💎 *Crypto Betting (REAL Money)*\n"
+        f"You can now bet with real cryptocurrency using @cctip_bot!\n"
+        f"• `/cryptobet dice <amount> <crypto>` - Dice with crypto\n"
+        f"• `/cryptobet coin <amount> <crypto>` - Coin flip with crypto\n"
+        f"• `/cryptobet number <amount> <crypto>` - Number game with crypto\n"
+        f"• `/cryptobet rps <amount> <crypto>` - RPS with crypto\n\n"
+        f"Supported cryptocurrencies: DOGE, TRX, USDT, BNB\n"
+        f"Example: `/cryptobet dice 1 doge`"
+    )
+    help_text += crypto_text
+    
+    # Add admin commands for the special admin user
+    if user_id == 1159603709:
+        admin_text = (
+            f"\n\n*🔐 Admin Commands:*\n"
+            f"• `/adminsetbalance <user_id> <amount>` - Set a user's balance\n"
+            f"• `/adminaddbalance <user_id> <amount>` - Add to a user's balance\n"
+            f"• `/adminremovebalance <user_id> <amount>` - Remove from a user's balance\n"
+            f"• `/adminlistwallets` - List all wallet balances\n"
+        )
+        help_text += admin_text
+    
     await update.message.reply_markdown(help_text)
 
 async def reset_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -58,13 +83,139 @@ async def reset_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
     Format: /resetwallet
     """
     user_id = update.effective_user.id
-    success, new_balance = deduct_funds(user_id, get_balance(user_id))
-    success, new_balance = add_funds(user_id, 1000)
+    success, new_balance = reset_wallet(user_id)
     
     await update.message.reply_markdown(
         f"💰 Your wallet has been reset!\n\n"
         f"New Balance: *{new_balance}* credits"
     )
+
+# Admin commands
+async def admin_set_balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Admin command to set a user's balance to a specific amount.
+    Format: /adminsetbalance <user_id> <amount>
+    """
+    admin_id = update.effective_user.id
+    
+    # Check arguments
+    if not context.args or len(context.args) != 2:
+        await update.message.reply_text(
+            "Usage: /adminsetbalance <user_id> <amount>\n"
+            "Example: /adminsetbalance 123456789 1000"
+        )
+        return
+    
+    try:
+        target_user_id = int(context.args[0])
+        amount = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("User ID and amount must be numbers.")
+        return
+    
+    success, message = admin_set_balance(admin_id, target_user_id, amount)
+    
+    if success:
+        await update.message.reply_markdown(f"✅ {message}")
+    else:
+        await update.message.reply_markdown(f"❌ {message}")
+
+async def admin_add_balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Admin command to add to a user's balance.
+    Format: /adminaddbalance <user_id> <amount>
+    """
+    admin_id = update.effective_user.id
+    
+    # Check arguments
+    if not context.args or len(context.args) != 2:
+        await update.message.reply_text(
+            "Usage: /adminaddbalance <user_id> <amount>\n"
+            "Example: /adminaddbalance 123456789 500"
+        )
+        return
+    
+    try:
+        target_user_id = int(context.args[0])
+        amount = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("User ID and amount must be numbers.")
+        return
+    
+    success, message = admin_add_balance(admin_id, target_user_id, amount)
+    
+    if success:
+        await update.message.reply_markdown(f"✅ {message}")
+    else:
+        await update.message.reply_markdown(f"❌ {message}")
+
+async def admin_remove_balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Admin command to remove from a user's balance.
+    Format: /adminremovebalance <user_id> <amount>
+    """
+    admin_id = update.effective_user.id
+    
+    # Check arguments
+    if not context.args or len(context.args) != 2:
+        await update.message.reply_text(
+            "Usage: /adminremovebalance <user_id> <amount>\n"
+            "Example: /adminremovebalance 123456789 200"
+        )
+        return
+    
+    try:
+        target_user_id = int(context.args[0])
+        amount = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("User ID and amount must be numbers.")
+        return
+    
+    success, message = admin_remove_balance(admin_id, target_user_id, amount)
+    
+    if success:
+        await update.message.reply_markdown(f"✅ {message}")
+    else:
+        await update.message.reply_markdown(f"❌ {message}")
+
+async def admin_list_wallets_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Admin command to list all wallet balances.
+    Format: /adminlistwallets
+    """
+    admin_id = update.effective_user.id
+    
+    success, wallet_data = admin_list_all_wallets(admin_id)
+    
+    if not success:
+        await update.message.reply_text("You don't have permission to view wallet data.")
+        return
+    
+    # Format the wallet data
+    if not wallet_data:
+        await update.message.reply_text("No wallet data available.")
+        return
+    
+    # Sort wallets by balance (highest first)
+    sorted_wallets = sorted(wallet_data.items(), key=lambda x: x[1], reverse=True)
+    
+    # Prepare message in chunks to avoid message size limits
+    wallet_text = "💰 *Wallet Balances*\n\n"
+    current_chunk = wallet_text
+    
+    for user_id, balance in sorted_wallets:
+        line = f"User ID: `{user_id}` - Balance: *{balance}* credits\n"
+        
+        # If adding this line would make the message too long, send the current chunk
+        if len(current_chunk) + len(line) > 4000:
+            await update.message.reply_markdown(current_chunk)
+            current_chunk = ""
+        
+        current_chunk += line
+    
+    # Send the final chunk if it has any content
+    if current_chunk:
+        await update.message.reply_markdown(current_chunk)
 
 async def bet_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -256,6 +407,47 @@ async def handle_betting_callback(update: Update, context: ContextTypes.DEFAULT_
             return True
         
         _, game_id, move = parts
+        # Check if the game exists and the user is in it
+        game = get_betting_game(game_id)
+        if not game:
+            await query.answer("This game no longer exists.", show_alert=True)
+            return True
+            
+        # Check if the user has already made a move
+        if user_id in game.player_moves:
+            # Get the player's move description
+            player_move = game.player_moves.get(user_id)
+            move_description = ""
+            
+            if game.game_type == GameType.DICE_ROLL:
+                move_description = f"rolled a 🎲 {player_move}"
+            elif game.game_type == GameType.COIN_FLIP:
+                move_str = player_move.capitalize() if hasattr(player_move, 'capitalize') else str(player_move).capitalize()
+                move_description = f"chose {move_str}"
+            elif game.game_type == GameType.NUMBER_GUESS:
+                move_description = f"picked the number {player_move}"
+            elif game.game_type == GameType.ROCK_PAPER_SCISSORS:
+                move_name = player_move.value.capitalize() if hasattr(player_move, 'value') else str(player_move).capitalize()
+                move_description = f"chose {move_name}"
+                
+            # Show a meaningful popup
+            await query.answer(f"You've already {move_description}! Wait for the game to complete.", show_alert=True)
+            
+            # Refresh the UI to ensure it reflects the correct state
+            keyboard = create_game_controls(game, user_id)
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            try:
+                await query.edit_message_text(
+                    game.get_status_text(),
+                    reply_markup=reply_markup,
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                print(f"Error updating game UI: {e}")
+                
+            return True
+            
         return await process_make_move(query, game_id, user_id, move, context)
     
     elif callback_data.startswith(BTN_CANCEL_GAME):
@@ -523,9 +715,60 @@ async def process_make_move(query, game_id: str, user_id: int, move_str: str, co
     
     # If game is over, settle the bet (and check if game exists)
     if game and game.state == GameState.GAME_OVER:
-        winner_id = game.winner_id if game.winner_id is not None else game.creator_id
-        
         try:
+            # Handle tie game case
+            if game.is_tie:
+                # Handle tie in single player mode
+                if game.single_player:
+                    # Add the bet amount back to the player
+                    add_funds(user_id, game.bet_amount)
+                    await query.edit_message_text(
+                        f"{game.get_status_text()}\n\n🔄 It's a tie! Your {game.bet_amount} credits have been refunded.",
+                        parse_mode="Markdown"
+                    )
+                    # Remove the game
+                    remove_betting_game(game_id)
+                    return True
+                
+                # Handle tie in multiplayer mode - use settle_bet with None for winner_id to refund everyone
+                else:
+                    success, message, amount = settle_bet(game_id, None)  # None indicates a tie
+                    if success:
+                        # Update all players with the tie result
+                        tie_announcement = "🔄 It's a tie! All bets have been refunded."
+                        
+                        # Update all players with the final result
+                        for player_id, message_info in game.player_messages.items():
+                            if player_id != user_id:  # Skip the current user, they're handled by the query
+                                try:
+                                    chat_id, message_id = message_info
+                                    await context.bot.edit_message_text(
+                                        f"{game.get_status_text()}\n\n{tie_announcement}",
+                                        chat_id=chat_id,
+                                        message_id=message_id,
+                                        parse_mode="Markdown"
+                                    )
+                                except Exception as e:
+                                    print(f"Error updating player {player_id}: {e}")
+                        
+                        # Update the current player's message
+                        await query.edit_message_text(
+                            f"{game.get_status_text()}\n\n{tie_announcement}",
+                            parse_mode="Markdown"
+                        )
+                        # Remove the game
+                        remove_betting_game(game_id)
+                        return True
+                    else:
+                        await query.edit_message_text(
+                            f"{game.get_status_text()}\n\nError settling tie game: {message}",
+                            parse_mode="Markdown"
+                        )
+                        return True
+            
+            # Handle winner cases
+            winner_id = game.winner_id
+            
             # Special handling for single-player games against bot
             if game.single_player and winner_id == -1:
                 # Bot won, no need to add funds to bot
@@ -756,6 +999,15 @@ async def process_refresh_game(query, game_id: str, user_id: int) -> bool:
     players_moved = len(game.player_moves)
     total_players = len(game.players)
     
+    # Store this message's chat_id and message_id for the current player
+    # This ensures we have the latest message info for updates
+    message_info = (query.message.chat_id, query.message.message_id)
+    game.player_messages[user_id] = message_info
+    
+    # Always update the UI to reflect the current game state, regardless of popup message
+    keyboard = create_game_controls(game, user_id)
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     # Determine what status information to show in popup alert
     status_popup = ""
     
@@ -789,37 +1041,54 @@ async def process_refresh_game(query, game_id: str, user_id: int) -> bool:
             else:
                 status_popup = f"Game Status: {move_desc}. Waiting for other player to move ({players_moved}/{total_players} players ready)."
                 
-            # Show popup instead of editing message to avoid "message not modified" errors
+            # Show popup alert
             await query.answer(status_popup, show_alert=True)
-            return True
-        else:
-            # Player hasn't moved yet - use normal edit to show move options
-            status_msg = "🚨 YOUR TURN - MAKE A MOVE NOW! 🚨\n\nIt's your turn to make a move. Please select one of the options below."
             
-            # Update the message with game controls - this will show buttons
-            keyboard = create_game_controls(game, user_id)
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
+            # Update the message text & UI to show current game state
+            status_msg = f"You've already made your move. Waiting for other players ({players_moved}/{total_players})."
             await query.edit_message_text(
                 f"{game.get_status_text()}\n\n{status_msg}",
                 reply_markup=reply_markup,
                 parse_mode="Markdown"
             )
-            return True
+        else:
+            # Player hasn't moved yet - prompt them to make a move
+            status_popup = f"Game Status: It's your turn to make a move ({players_moved}/{total_players} players ready)."
+            await query.answer(status_popup, show_alert=True)
+            
+            # Update UI with move options
+            status_msg = "🚨 YOUR TURN - MAKE A MOVE NOW! 🚨\n\nIt's your turn to make a move. Please select one of the options below."
+            await query.edit_message_text(
+                f"{game.get_status_text()}\n\n{status_msg}",
+                reply_markup=reply_markup,
+                parse_mode="Markdown"
+            )
     elif game.state == GameState.GAME_OVER:
         # Game is over - show status in popup alert
         status_popup = f"Game is over! Winner: {game.winner_id}"
         if game.winner_id in game.player_usernames:
             winner_name = f"@{game.player_usernames[game.winner_id]}"
             status_popup = f"Game over! Winner: {winner_name}"
-            
+        
         await query.answer(status_popup, show_alert=True)
-        return True
+        
+        # Update to show final game state
+        await query.edit_message_text(
+            game.get_status_text(),
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
     else:
         # Other states (waiting for player)
         status_popup = f"Game Status: {game.state.name}. {players_moved}/{total_players} players have moved."
         await query.answer(status_popup, show_alert=True)
-        return True
+        
+        # Update UI to match current state
+        await query.edit_message_text(
+            game.get_status_text(),
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
     
     return True
 
@@ -873,8 +1142,9 @@ def create_game_controls(game: BettingGame, user_id: int) -> List[List[InlineKey
         player1_button = InlineKeyboardButton(f"{player1_name}: {player1_status}", callback_data="none")
         player2_button = InlineKeyboardButton(f"{player2_name}: {player2_status}", callback_data="none")
         
-        # If this is the current user and they haven't moved, show their move button
-        if user_id not in game.player_moves:
+        # Show different UI based on whether user has made their move and game state
+        if user_id not in game.player_moves and game.state == GameState.WAITING_FOR_MOVES:
+            # User hasn't made a move yet and game is waiting for moves
             # Create multiple move options based on game type
             if game.game_type == GameType.DICE_ROLL:
                 # For dice, simple single button
@@ -930,8 +1200,8 @@ def create_game_controls(game: BettingGame, user_id: int) -> List[List[InlineKey
             # Add refresh button at the bottom
             keyboard.append([InlineKeyboardButton("↻ Refresh", callback_data=f"refresh:{game.game_id}")])
         else:
-            # This user has already made their move - don't show a "Check Result" button
-            # Show the player status and a refresh button
+            # Either user already made their move or game is not in the waiting for moves state
+            # Show the player status and a refresh button only - no move buttons
             keyboard = [
                 [player1_button], 
                 [player2_button],
