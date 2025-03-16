@@ -246,6 +246,108 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif query.data.startswith("extract_sm_audio:"):
         _, platform, url = query.data.split(":", 2)
         await extract_social_media_audio(query, context, url, platform)
+    
+    # Handle direct betting game buttons from start menu
+    elif query.data == "start_wallet":
+        # Call the wallet command handler
+        from handlers.betting_handlers import wallet_command
+        message = query.message
+        # Create a new update object with the message
+        new_update = Update(
+            update_id=update.update_id,
+            message=message,
+            callback_query=None
+        )
+        await wallet_command(new_update, context)
+        
+    elif query.data.startswith("start_bet_"):
+        game_type = query.data.replace("start_bet_", "")
+        chat_id = query.message.chat_id
+        user_id = query.from_user.id
+        
+        # Default bet amount for quick-start buttons
+        bet_amount = 100
+        
+        # Map game type string to GameType enum
+        from betting_game import GameType, create_betting_game, PlayerMove
+        from wallet_system import get_balance, deduct_funds, settle_bet
+        
+        game_type_enum = None
+        if game_type == "dice":
+            game_type_enum = GameType.DICE_ROLL
+        elif game_type == "coin":
+            game_type_enum = GameType.COIN_FLIP
+        elif game_type == "rps":
+            game_type_enum = GameType.ROCK_PAPER_SCISSORS
+        elif game_type == "number":
+            game_type_enum = GameType.NUMBER_GUESS
+        
+        if not game_type_enum:
+            await query.message.reply_text("Invalid game type. Please try again.")
+            return
+            
+        # Check if user has enough balance
+        user_balance = get_balance(user_id)
+        if user_balance < bet_amount:
+            await query.message.reply_markdown(
+                f"❌ You don't have enough credits!\n\n"
+                f"Your Balance: *{user_balance}* credits\n"
+                f"Bet Amount: *{bet_amount}* credits\n\n"
+                f"Use `/wallet` to check your balance."
+            )
+            return
+            
+        # Deduct the bet amount from the user's balance
+        success, new_balance = deduct_funds(user_id, bet_amount)
+        if not success:
+            await query.message.reply_text(f"Error deducting funds. Please try again.")
+            return
+            
+        # Create a single-player game with the bot
+        game = create_betting_game(game_type_enum, user_id, bet_amount, single_player=True)
+        
+        # Use different buttons based on game type
+        keyboard = []
+        
+        if game_type_enum == GameType.DICE_ROLL:
+            # Dice game - player just rolls
+            keyboard = [[InlineKeyboardButton("🎲 Roll Dice", callback_data=f"betting_game_move:{game.game_id}:roll")]]
+        
+        elif game_type_enum == GameType.COIN_FLIP:
+            # Coin flip - player guesses heads or tails
+            keyboard = [
+                [
+                    InlineKeyboardButton("Heads", callback_data=f"betting_game_move:{game.game_id}:heads"),
+                    InlineKeyboardButton("Tails", callback_data=f"betting_game_move:{game.game_id}:tails")
+                ]
+            ]
+            
+        elif game_type_enum == GameType.NUMBER_GUESS:
+            # Number guessing - provide number buttons 1-10
+            row1 = [InlineKeyboardButton(str(i), callback_data=f"betting_game_move:{game.game_id}:{i}") for i in range(1, 6)]
+            row2 = [InlineKeyboardButton(str(i), callback_data=f"betting_game_move:{game.game_id}:{i}") for i in range(6, 11)]
+            keyboard = [row1, row2]
+            
+        elif game_type_enum == GameType.ROCK_PAPER_SCISSORS:
+            # Rock Paper Scissors - provide RPS buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("🪨 Rock", callback_data=f"betting_game_move:{game.game_id}:rock"),
+                    InlineKeyboardButton("📄 Paper", callback_data=f"betting_game_move:{game.game_id}:paper"),
+                    InlineKeyboardButton("✂️ Scissors", callback_data=f"betting_game_move:{game.game_id}:scissors")
+                ]
+            ]
+            
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Send game info
+        await query.message.reply_markdown(
+            f"🎮 *Single Player {game_type_enum.value.replace('_', ' ').title()} Game*\n\n"
+            f"Game ID: `{game.game_id}`\n"
+            f"Bet Amount: {bet_amount} credits\n\n"
+            f"Make your move using the buttons below!"
+            , reply_markup=reply_markup
+        )
         
     # Handle checkers game help
     elif query.data == "help_checkers":
@@ -455,6 +557,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "• /ttotal - Show total messages this year\n"
             "• /admins - View group administrators (groups only)\n\n"
             "Try these commands for some entertainment and useful features!"
+        )
+        
+        # Create back button
+        keyboard = [[InlineKeyboardButton("« Back to Menu", callback_data="help_back")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.message.edit_text(help_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+        
+    elif query.data == "help_betting":
+        # Show betting games help
+        help_text = (
+            "🎮 *Betting Games* 🎮\n\n"
+            "*Virtual Wallet System*\n"
+            "• /wallet - Check your virtual wallet balance\n"
+            "• /resetwallet - Reset your wallet to default\n\n"
+            
+            "*Game Commands*\n"
+            "• /bet dice <amount> [solo] - Start a dice rolling game\n"
+            "• /bet coin <amount> [solo] - Start a coin flip game\n"
+            "• /bet rps <amount> [solo] - Start Rock Paper Scissors game\n"
+            "• /bet number <amount> [solo] - Start a number guessing game\n\n"
+            
+            "*How It Works*\n"
+            "1. For single-player: Add 'solo' to play against the bot\n"
+            "   Example: `/bet dice 100 solo`\n"
+            "2. For multiplayer: Start a game and wait for players\n"
+            "3. Make your moves when prompted\n"
+            "4. Winner takes all virtual credits!\n\n"
+            
+            "*Quick Start*\n"
+            "Use the game buttons on the /start menu for instant single-player games\n\n"
+            
+            "Note: This is a virtual betting system for fun only. No real money is involved."
         )
         
         # Create back button

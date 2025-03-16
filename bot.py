@@ -2,6 +2,33 @@
 Bot initialization and setup.
 """
 import os
+import sys
+import logging
+import asyncio
+import time
+import re
+import json
+import random
+from typing import Dict, List, Tuple, Set, Optional, Any
+
+# For dealing with Telegram's async deprecation warnings
+import nest_asyncio
+nest_asyncio.apply()
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler
+from telegram.ext import filters, ContextTypes, ChatMemberHandler
+
+from api_client import AIApiClient
+from conversation import ConversationManager
+from message_counter import MessageCounter
+import handlers.betting_handlers
+import handlers.translate_handlers
+import handlers.message_handlers
+import handlers.photo_handlers
+import handlers.game_handlers
+import handlers.command_handlers
+import os
 import logging
 import random
 import re
@@ -48,6 +75,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "• Analyze images to detect objects and extract text\n"
         "• Extract content from websites\n"
         "• Convert text to handwritten style\n"
+        "• Play games with virtual betting\n"
         "• And much more!\n\n"
         "Try the buttons below to explore my features, or just start chatting with me right away!"
     )
@@ -67,15 +95,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             InlineKeyboardButton("🎬 YouTube Download", callback_data="help_youtube"),
             InlineKeyboardButton("📝 Handwritten Text", callback_data="help_write")
         ],
+        # Games & Betting button
+        [
+            InlineKeyboardButton("💰 Check Wallet", callback_data="start_wallet"),
+            InlineKeyboardButton("🎮 Betting Games", callback_data="help_betting")
+        ],
         [
             InlineKeyboardButton("♟️ Play Checkers", callback_data="help_checkers"),
-            InlineKeyboardButton("🧮 Calculator", callback_data="help_calculate")
-        ],
-        [
-            InlineKeyboardButton("😈 Insult Generator", callback_data="help_insult"),
-            InlineKeyboardButton("📊 Fun & Stats", callback_data="help_fun")
-        ],
-        [
             InlineKeyboardButton("📚 All Commands", callback_data="help_all")
         ]
     ]
@@ -111,7 +137,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• /checkers [@username] - Play a game of checkers\n"
         "• /move A3-B4 - Make a move in your checkers game\n"
         "• /endcheckers - End the current checkers game\n"
-        "• /fun - Play a number guessing game\n\n"
+        "• /fun - Play a number guessing game\n"
+        "• /wallet - Check your virtual wallet balance\n"
+        "• /resetwallet - Reset your wallet to default\n"
+        "• /bet <game> <amount> [solo] - Start a betting game\n\n"
+        
+        "*Quick Betting Games*\n"
+        "• /dice [amount] - Play a single-player dice roll game\n"
+        "• /coin [amount] - Play a single-player coin flip game\n"
+        "• /number [amount] - Play a single-player number guessing game\n"
+        "• /rps [amount] - Play rock-paper-scissors against the bot\n"
+        "  Default bet: 100 credits if amount not specified\n\n"
         
         "*Creative & Utilities*\n"
         "• /write <text> - Convert text to handwritten style\n"
@@ -995,15 +1031,59 @@ def calculate_expression(expression):
         logger.error(f"Error calculating expression: {str(e)}")
         return None
 
+async def langs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Show a list of supported languages for translation.
+    Format: /langs
+    """
+    from services.translate_service import TranslationService
+    
+    # Get supported languages
+    languages = TranslationService.get_supported_languages()
+    
+    # Format the message with languages in columns
+    formatted_langs = []
+    for code, name in sorted(languages.items(), key=lambda x: x[1]):
+        formatted_langs.append(f"• {name.title()} (`{code}`)")
+    
+    # Split into chunks for better readability
+    chunk_size = 20
+    chunks = [formatted_langs[i:i + chunk_size] for i in range(0, len(formatted_langs), chunk_size)]
+    
+    # Create message text with all languages
+    message_text = "🌐 *Supported Translation Languages*\n\n"
+    
+    for i, chunk in enumerate(chunks, 1):
+        message_text += f"*Page {i}/{len(chunks)}*\n"
+        message_text += "\n".join(chunk[:chunk_size]) + "\n\n"
+    
+    # Add usage examples
+    message_text += "*Usage Examples:*\n"
+    message_text += "• `/tl Hello world` - Auto-detect and translate to English\n"
+    message_text += "• `/tl ja Hello world` - Translate to Japanese\n"
+    message_text += "• `/tl fr//en Bonjour` - Translate from French to English\n"
+    message_text += "• Reply to a message with `/tl` to translate it to English\n"
+    
+    # Send the message in chunks if it's too long
+    max_length = 4000
+    if len(message_text) > max_length:
+        text_parts = [message_text[i:i + max_length] for i in range(0, len(message_text), max_length)]
+        for part in text_parts:
+            await update.message.reply_markdown(part)
+    else:
+        await update.message.reply_markdown(message_text)
+
 async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handle the /tl command to translate text.
     
     Formats:
     - /tl <text> (auto-detects source language, translates to English)
-    - /tl <lang_code> <text> (translates to specified language)
+    - /tl <lang> <text> (translates to specified language)
+    - /tl <source>//<dest> <text> (translates from source to destination language)
     - Reply to a message with /tl (translates the replied message to English)
-    - Reply with /tl <lang_code> (translates to specified language)
+    - Reply with /tl <lang> (translates to specified language)
+    - Reply with /tl <source>//<dest> (translates from source to destination language)
     """
     # Check if it's a reply to another message
     is_reply = update.message.reply_to_message is not None
@@ -1016,12 +1096,21 @@ async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Extract the text to translate and the target language
     text_to_translate = None
     target_language = 'en'  # Default to English
+    source_language = 'auto'  # Default to auto-detect
     
     if context.args:
-        # Check if the first argument is a language code
+        # Check if the first argument contains source//dest format
         first_arg = context.args[0].lower()
-        # A simple check - language codes are usually 2-5 characters
-        if 2 <= len(first_arg) <= 5:
+        if '//' in first_arg:
+            parts = first_arg.split('//')
+            if len(parts) == 2:
+                source_language = parts[0]
+                target_language = parts[1]
+                # Rest of arguments form the text
+                if len(context.args) > 1:
+                    text_to_translate = ' '.join(context.args[1:])
+        # Check if the first argument is a language code
+        elif 2 <= len(first_arg) <= 8:  # Allow longer codes like 'zh-cn'
             target_language = first_arg
             # Rest of arguments form the text
             if len(context.args) > 1:
@@ -1047,8 +1136,8 @@ async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
     
     try:
-        # Perform the translation using a simple URL-based approach
-        translated_text = await translate_text(text_to_translate, target_language)
+        # Perform the translation using the specified source and target languages
+        translated_text = await translate_text(text_to_translate, target_language, source_language)
         
         # Try to delete the status message
         try:
@@ -1056,32 +1145,15 @@ async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         except Exception:
             pass
         
-        # Create buttons for common languages
-        keyboard = [
-            [
-                InlineKeyboardButton("🇬🇧 English", callback_data=f"translate:en:{text_to_translate[:50]}"),
-                InlineKeyboardButton("🇪🇸 Spanish", callback_data=f"translate:es:{text_to_translate[:50]}")
-            ],
-            [
-                InlineKeyboardButton("🇫🇷 French", callback_data=f"translate:fr:{text_to_translate[:50]}"),
-                InlineKeyboardButton("🇩🇪 German", callback_data=f"translate:de:{text_to_translate[:50]}")
-            ],
-            [
-                InlineKeyboardButton("🇨🇳 Chinese", callback_data=f"translate:zh-cn:{text_to_translate[:50]}"),
-                InlineKeyboardButton("🇯🇵 Japanese", callback_data=f"translate:ja:{text_to_translate[:50]}")
-            ],
-            [
-                InlineKeyboardButton("🇪🇹 Amharic", callback_data=f"translate:am:{text_to_translate[:50]}")
-            ]
-        ]
+        # Create a language info message to display which languages were used
+        lang_info = f"({source_language} → {target_language})"
+        if source_language == "auto":
+            lang_info = f"(auto → {target_language})"
         
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Send the translation
+        # Send the translation without buttons
         await update.message.reply_text(
-            f"🌐 *Translation*\n\n{translated_text}",
-            parse_mode="Markdown",
-            reply_markup=reply_markup
+            f"🌐 *Translation* {lang_info}\n\n{translated_text}",
+            parse_mode="Markdown"
         )
         
     except Exception as e:
@@ -1103,10 +1175,13 @@ async def show_translation_help(update: Update) -> None:
     help_text = (
         "🌐 *Translation Help*\n\n"
         "*Usage:*\n"
-        "• `/tl Hello world` - Translate to English\n"
+        "• `/tl Hello world` - Auto-detect and translate to English\n"
         "• `/tl es Hello world` - Translate to Spanish\n"
+        "• `/tl fr//en Bonjour` - Translate from French to English\n"
         "• Reply to any message with `/tl` - Translate to English\n"
-        "• Reply with `/tl fr` - Translate to French\n\n"
+        "• Reply with `/tl fr` - Translate to French\n"
+        "• Reply with `/tl ja//en` - Translate from Japanese to English\n"
+        "• `/langs` - Show all supported languages\n\n"
         "*Some Language Codes:*\n"
         "• English: `en`\n"
         "• Spanish: `es`\n"
@@ -1121,31 +1196,10 @@ async def show_translation_help(update: Update) -> None:
         "• Hindi: `hi`"
     )
     
-    # Create a keyboard with common language options
-    keyboard = [
-        [
-            InlineKeyboardButton("🇬🇧 English", callback_data="translate_help:en"),
-            InlineKeyboardButton("🇪🇸 Spanish", callback_data="translate_help:es")
-        ],
-        [
-            InlineKeyboardButton("🇫🇷 French", callback_data="translate_help:fr"),
-            InlineKeyboardButton("🇩🇪 German", callback_data="translate_help:de")
-        ],
-        [
-            InlineKeyboardButton("🇨🇳 Chinese", callback_data="translate_help:zh-cn"),
-            InlineKeyboardButton("🇯🇵 Japanese", callback_data="translate_help:ja")
-        ],
-        [
-            InlineKeyboardButton("🇪🇹 Amharic", callback_data="translate_help:am")
-        ]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
+    # Send the help text without any buttons
     await update.message.reply_text(
         help_text,
-        parse_mode="Markdown",
-        reply_markup=reply_markup
+        parse_mode="Markdown"
     )
 
 async def translate_text(text: str, target_lang: str = 'en', source_lang: str = 'auto') -> str:
@@ -1588,10 +1642,21 @@ def create_bot():
     application.add_handler(CommandHandler("insult", insult_command))
     application.add_handler(CommandHandler("calculate", calculate_command))
     application.add_handler(CommandHandler("tl", translate_command))
+    application.add_handler(CommandHandler("langs", langs_command))
     
     # Add new command handlers
     application.add_handler(CommandHandler("search", search_command))
     application.add_handler(CommandHandler("scrape", scrape_command))
+    application.add_handler(CommandHandler("wallet", handlers.betting_handlers.wallet_command))
+    application.add_handler(CommandHandler("resetwallet", handlers.betting_handlers.reset_wallet_command))
+    application.add_handler(CommandHandler("bet", handlers.betting_handlers.bet_command))
+    
+    # Add direct game command handlers
+    application.add_handler(CommandHandler("dice", handlers.betting_handlers.dice_command))
+    application.add_handler(CommandHandler("coin", handlers.betting_handlers.coin_command))
+    application.add_handler(CommandHandler("number", handlers.betting_handlers.number_command))
+    application.add_handler(CommandHandler("rps", handlers.betting_handlers.rps_command))
+    
     application.add_handler(CommandHandler("youtube", youtube_command))
     application.add_handler(CommandHandler("analyze", analyze_command))
     
@@ -1605,6 +1670,13 @@ def create_bot():
     
     # Add callback query handlers
     application.add_handler(CallbackQueryHandler(handle_checkers_callback, pattern=r"^(join_checkers|move_checkers)"))
+    
+    # Add betting game callback handler
+    application.add_handler(CallbackQueryHandler(
+        handlers.betting_handlers.handle_betting_callback,
+        pattern=r"^(join_betting_game|betting_game_move|cancel_betting_game)"
+    ))
+    
     application.add_handler(CallbackQueryHandler(handle_callback))  # Fallback for all other callbacks
     
     # Add chat member update handler
@@ -1634,6 +1706,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
         return True
     
     # Add any other game message handlers here
+    # No need to add betting game logic here since it uses buttons exclusively
     
     # If not handled by any game, let it fallthrough to the next handler
     return False
